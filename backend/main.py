@@ -10,8 +10,10 @@ from config import settings
 from models import (
     LoginRequest, OTPVerifyRequest, Token, UserCreate, User,
     DHParams, DHExchangeRequest, DHExchangeResponse,
-    EncryptedMessage, LeaveRequest, MessageInDB
+    EncryptedMessage, LeaveRequest, MessageInDB,
+    LeaveRequestCreate, LeaveRequestUpdate, LeaveRequestResponse
 )
+from typing import List
 from security import (
     verify_password, get_password_hash, create_access_token,
     decode_access_token, generate_otp,
@@ -71,10 +73,11 @@ app = FastAPI(title="Secure HR Management System", lifespan=lifespan)
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],  # Vite ports
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000", "http://127.0.0.1:5173"],  # Vite ports
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Email Configuration
@@ -155,13 +158,35 @@ async def login(request: LoginRequest, background_tasks: BackgroundTasks):
     Step 1: Authenticate user with email/password.
     If valid, generate and send OTP.
     """
-    user = db.get_user_by_email(request.email)
+    # Check if login is blocked
+    is_blocked, remaining_seconds = db.is_login_blocked(request.email)
+    if is_blocked:
+        minutes = remaining_seconds // 60
+        seconds = remaining_seconds % 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Trop de tentatives. Réessayez dans {minutes}m {seconds}s"
+        )
     
-    if not user or not verify_password(request.password, user['password_hash']):
+    # Check if user exists
+    user = db.get_user_by_email(request.email)
+    if not user:
+        db.record_login_attempt(request.email, False)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Erreur utilisateur n'existe pas"
+        )
+    
+    # Verify password
+    if not verify_password(request.password, user['password_hash']):
+        db.record_login_attempt(request.email, False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
+            detail="Mot de passe incorrect"
         )
+    
+    # Success - reset login attempts
+    db.record_login_attempt(request.email, True)
     
     # Generate OTP
     otp_code = generate_otp(settings.OTP_LENGTH)
@@ -181,11 +206,26 @@ async def verify_otp(request: OTPVerifyRequest):
     """
     Step 2: Verify OTP and issue JWT token.
     """
+    # Check if OTP verification is blocked
+    is_blocked, remaining_seconds = db.is_otp_blocked(request.email)
+    if is_blocked:
+        minutes = remaining_seconds // 60
+        seconds = remaining_seconds % 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Trop de tentatives OTP. Réessayez dans {minutes}m {seconds}s"
+        )
+    
+    # Verify OTP
     if not db.verify_otp(request.email, request.otp_code):
+        db.record_otp_attempt(request.email, False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired OTP"
+            detail="Code OTP invalide ou expiré"
         )
+    
+    # Success - reset OTP attempts
+    db.record_otp_attempt(request.email, True)
     
     # Get user
     user = db.get_user_by_email(request.email)
@@ -205,6 +245,60 @@ async def verify_otp(request: OTPVerifyRequest):
     )
     
     return Token(access_token=access_token)
+
+
+@app.post("/auth/resend-otp")
+async def resend_otp(request: LoginRequest, background_tasks: BackgroundTasks):
+    """
+    Resend OTP code. Expires the old one and generates a new one.
+    """
+    # Check if OTP verification is blocked
+    is_blocked, remaining_seconds = db.is_otp_blocked(request.email)
+    if is_blocked:
+        minutes = remaining_seconds // 60
+        seconds = remaining_seconds % 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Trop de tentatives OTP. Réessayez dans {minutes}m {seconds}s"
+        )
+    
+    # Verify user exists and password is correct
+    user = db.get_user_by_email(request.email)
+    if not user or not verify_password(request.password, user['password_hash']):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials"
+        )
+    
+    # Generate new OTP (this will automatically remove the old one)
+    otp_code = generate_otp(settings.OTP_LENGTH)
+    db.store_otp(request.email, otp_code)
+    
+    # Send OTP via email
+    background_tasks.add_task(send_otp_email, request.email, otp_code)
+    
+    return {
+        "message": "Nouveau code OTP envoyé à votre email",
+        "email": request.email
+    }
+
+
+@app.post("/auth/cancel-otp")
+async def cancel_otp(request: dict):
+    """
+    Cancel current OTP session and reset attempts.
+    """
+    email = request.get("email")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email is required"
+        )
+    
+    # Cancel OTP and reset attempts
+    db.cancel_otp(email)
+    
+    return {"message": "OTP session cancelled"}
 
 
 @app.get("/auth/me", response_model=User)
@@ -406,6 +500,183 @@ async def decrypt_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Decryption failed: {str(e)}"
         )
+
+
+# ==================== LEAVE/ABSENCE REQUEST ENDPOINTS ====================
+
+@app.post("/leave-requests", response_model=dict)
+async def create_leave_request(
+    request_data: LeaveRequestCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Employee creates a new leave/absence request.
+    Only employees can create requests.
+    """
+    if current_user['role'] != "employee":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seuls les employés peuvent créer des demandes"
+        )
+    
+    # Create the request
+    request_id = db.create_leave_request(
+        employee_id=current_user.doc_id,
+        employee_email=current_user['email'],
+        type=request_data.type,
+        start_date=request_data.start_date,
+        end_date=request_data.end_date,
+        reason=request_data.reason,
+        days_count=request_data.days_count
+    )
+    
+    return {
+        "message": "Demande créée avec succès",
+        "request_id": request_id
+    }
+
+
+@app.get("/leave-requests/my-requests", response_model=List[LeaveRequestResponse])
+async def get_my_leave_requests(current_user: dict = Depends(get_current_user)):
+    """
+    Employee views their own leave requests.
+    Only employees can access this endpoint.
+    """
+    if current_user['role'] != "employee":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès refusé"
+        )
+    
+    requests = db.get_leave_requests_by_employee(current_user.doc_id)
+    
+    result = []
+    for req in requests:
+        result.append(LeaveRequestResponse(
+            id=req.doc_id,
+            employee_id=req['employee_id'],
+            employee_email=req['employee_email'],
+            type=req['type'],
+            start_date=req['start_date'],
+            end_date=req['end_date'],
+            reason=req['reason'],
+            days_count=req['days_count'],
+            status=req['status'],
+            hr_comment=req.get('hr_comment'),
+            created_at=req['created_at'],
+            updated_at=req.get('updated_at')
+        ))
+    
+    return result
+
+
+@app.get("/leave-requests/all", response_model=List[LeaveRequestResponse])
+async def get_all_leave_requests(current_user: dict = Depends(get_current_user)):
+    """
+    HR Manager views all leave requests.
+    Only HR Managers can access this endpoint.
+    Admin cannot access this.
+    """
+    if current_user['role'] != "hr_manager":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul le DRH peut voir toutes les demandes"
+        )
+    
+    requests = db.get_all_leave_requests()
+    
+    result = []
+    for req in requests:
+        result.append(LeaveRequestResponse(
+            id=req.doc_id,
+            employee_id=req['employee_id'],
+            employee_email=req['employee_email'],
+            type=req['type'],
+            start_date=req['start_date'],
+            end_date=req['end_date'],
+            reason=req['reason'],
+            days_count=req['days_count'],
+            status=req['status'],
+            hr_comment=req.get('hr_comment'),
+            created_at=req['created_at'],
+            updated_at=req.get('updated_at')
+        ))
+    
+    return result
+
+
+@app.put("/leave-requests/{request_id}/status")
+async def update_leave_request_status(
+    request_id: int,
+    update_data: LeaveRequestUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    HR Manager updates the status of a leave request (approve/reject).
+    Only HR Managers can update status.
+    """
+    if current_user['role'] != "hr_manager":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul le DRH peut valider les demandes"
+        )
+    
+    # Check if request exists
+    request = db.get_leave_request(request_id)
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Demande non trouvée"
+        )
+    
+    # Update status
+    db.update_leave_request_status(
+        request_id=request_id,
+        status=update_data.status,
+        hr_comment=update_data.hr_comment
+    )
+    
+    return {"message": f"Demande {update_data.status} avec succès"}
+
+
+@app.delete("/leave-requests/{request_id}")
+async def delete_leave_request(
+    request_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Employee deletes their own pending leave request.
+    Only the owner can delete, and only if status is pending.
+    """
+    if current_user['role'] != "employee":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès refusé"
+        )
+    
+    # Check if request exists and belongs to the user
+    request = db.get_leave_request(request_id)
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Demande non trouvée"
+        )
+    
+    if request['employee_id'] != current_user.doc_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vous ne pouvez supprimer que vos propres demandes"
+        )
+    
+    if request['status'] != 'pending':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Vous ne pouvez supprimer que les demandes en attente"
+        )
+    
+    db.delete_leave_request(request_id)
+    
+    return {"message": "Demande supprimée avec succès"}
 
 
 # ==================== ADMIN ENDPOINTS ====================

@@ -20,11 +20,14 @@
 Ce système simule une application de gestion RH sécurisée qui implémente des protocoles cryptographiques avancés pour garantir la confidentialité et l'intégrité des communications entre employés et responsables RH.
 
 ### 🔑 Caractéristiques Principales
-- **Authentification Multi-Facteurs (MFA)** via OTP par email
+- **Authentification Multi-Facteurs (MFA)** via OTP par email avec protection anti-brute force
 - **Échange de clés Diffie-Hellman** pour établir un canal sécurisé
 - **Chiffrement AES-256-CBC** pour les données sensibles
 - **Architecture Zero-Knowledge** : les clés privées ne quittent jamais le client
 - **Gestion des rôles** : Admin, RH Manager, Employé
+- **Système de demandes d'absence/congés** avec contrôle d'accès par rôle (RBAC)
+- **Protection contre les attaques par force brute** : blocage après 5 tentatives
+- **Gestion intelligente des OTP** : renvoi et annulation sécurisés
 
 ### 🛠️ Technologies Utilisées
 
@@ -186,7 +189,166 @@ async def send_otp_email(email: str, otp_code: str):
     await fast_mail.send_message(message)
 ```
 
-### 🔑 2. Tokens JWT (JSON Web Tokens)
+### �️ 2. Protection Anti-Brute Force
+
+#### Limitation des Tentatives de Connexion
+
+**Principe** :
+- Maximum 5 tentatives de login par email
+- Blocage automatique de 5 minutes après 5 échecs
+- Compteur réinitialisé après connexion réussie
+- Messages d'erreur spécifiques (évite l'énumération d'utilisateurs)
+
+**Implémentation Base de Données** :
+```python
+# database.py
+def record_login_attempt(self, email: str, success: bool):
+    """Enregistre une tentative de connexion."""
+    if success:
+        # Réinitialiser après succès
+        self.login_attempts.remove(Attempt.email == email)
+    else:
+        # Incrémenter les échecs
+        failed_count = attempts.get('failed_count', 0) + 1
+        self.login_attempts.update({
+            'failed_count': failed_count,
+            'last_attempt': datetime.utcnow().isoformat()
+        })
+
+def is_login_blocked(self, email: str) -> tuple[bool, int]:
+    """Vérifie si le login est bloqué. Retourne (is_blocked, remaining_seconds)."""
+    failed_count = attempts.get('failed_count', 0)
+    if failed_count >= 5:
+        last_attempt = datetime.fromisoformat(attempts['last_attempt'])
+        block_until = last_attempt + timedelta(minutes=5)
+        remaining = int((block_until - datetime.utcnow()).total_seconds())
+        return remaining > 0, max(0, remaining)
+    return False, 0
+```
+
+**Endpoint Login Sécurisé** :
+```python
+@app.post("/auth/login")
+async def login(request: LoginRequest, background_tasks: BackgroundTasks):
+    # 1. Vérifier si bloqué
+    is_blocked, remaining_seconds = db.is_login_blocked(request.email)
+    if is_blocked:
+        minutes = remaining_seconds // 60
+        seconds = remaining_seconds % 60
+        raise HTTPException(
+            status_code=429,
+            detail=f"Trop de tentatives. Réessayez dans {minutes}m {seconds}s"
+        )
+    
+    # 2. Vérifier existence utilisateur
+    user = db.get_user_by_email(request.email)
+    if not user:
+        db.record_login_attempt(request.email, False)
+        raise HTTPException(
+            status_code=404,
+            detail="Erreur utilisateur n'existe pas"
+        )
+    
+    # 3. Vérifier mot de passe
+    if not verify_password(request.password, user['password_hash']):
+        db.record_login_attempt(request.email, False)
+        raise HTTPException(
+            status_code=401,
+            detail="Mot de passe incorrect"
+        )
+    
+    # 4. Succès - réinitialiser tentatives
+    db.record_login_attempt(request.email, True)
+    # ... suite du login
+```
+
+#### Limitation des Tentatives OTP
+
+**Principe** :
+- Maximum 5 tentatives OTP par session
+- Blocage de 5 minutes après 5 échecs
+- Bouton "Re-envoyer l'OTP" après erreur
+- Ancien code expiré lors du renvoi
+- Annulation d'OTP fonctionnelle
+
+**Vérification OTP Protégée** :
+```python
+@app.post("/auth/verify-otp", response_model=Token)
+async def verify_otp(request: OTPVerifyRequest):
+    # Vérifier blocage OTP
+    is_blocked, remaining = db.is_otp_blocked(request.email)
+    if is_blocked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Trop de tentatives OTP. Réessayez dans {remaining//60}m {remaining%60}s"
+        )
+    
+    # Vérifier OTP
+    if not db.verify_otp(request.email, request.otp_code):
+        db.record_otp_attempt(request.email, False)
+        raise HTTPException(
+            status_code=401,
+            detail="Code OTP invalide ou expiré"
+        )
+    
+    # Succès
+    db.record_otp_attempt(request.email, True)
+    # ... génération token
+```
+
+**Renvoi d'OTP** :
+```python
+@app.post("/auth/resend-otp")
+async def resend_otp(request: LoginRequest, background_tasks: BackgroundTasks):
+    """Renvoie un nouveau code OTP et expire l'ancien."""
+    is_blocked, remaining = db.is_otp_blocked(request.email)
+    if is_blocked:
+        raise HTTPException(status_code=429, detail="Trop de tentatives")
+    
+    # Nouveau code (expire automatiquement l'ancien)
+    otp_code = generate_otp(6)
+    db.store_otp(request.email, otp_code)
+    background_tasks.add_task(send_otp_email, request.email, otp_code)
+    
+    return {"message": "Nouveau code OTP envoyé"}
+```
+
+**Annulation d'OTP** :
+```python
+@app.post("/auth/cancel-otp")
+async def cancel_otp(request: dict):
+    """Annule la session OTP actuelle."""
+    db.cancel_otp(request.get("email"))  # Supprime OTP et tentatives
+    return {"message": "OTP session cancelled"}
+```
+
+**Frontend - Gestion du Bouton Retour** :
+```javascript
+const handleBackToLogin = async () => {
+  try {
+    // Annuler OTP côté serveur
+    await cancelOTP(email);
+  } finally {
+    // Réinitialiser état
+    setStep(1);
+    setOtpCode('');
+    setError('');
+    setShowResendButton(false);
+  }
+};
+```
+
+#### Messages d'Erreur Spécifiques
+
+| Situation | Message | Code HTTP |
+|-----------|---------|-----------|
+| Email inexistant | "Erreur utilisateur n'existe pas" | 404 |
+| Mot de passe incorrect | "Mot de passe incorrect" | 401 |
+| 5 tentatives login | "Trop de tentatives. Réessayez dans Xm Ys" | 429 |
+| OTP invalide | "Code OTP invalide ou expiré" | 401 |
+| 5 tentatives OTP | "Trop de tentatives OTP. Réessayez dans Xm Ys" | 429 |
+
+### 🔑 3. Tokens JWT (JSON Web Tokens)
 
 #### Principe
 Les tokens JWT permettent une authentification stateless et sécurisée.
@@ -1357,19 +1519,375 @@ Authorization: Bearer <token>
 
 ---
 
-## 📊 Statistiques et Performance
+## � Système de Gestion des Demandes d'Absence/Congés
+
+### 🎯 Vue d'ensemble
+
+Le système implémente un module complet de gestion des demandes d'absence et de congés avec un contrôle d'accès basé sur les rôles (RBAC - Role-Based Access Control).
+
+### 🔐 Matrice de Contrôle d'Accès
+
+| Fonctionnalité | Employé | DRH | Admin IT |
+|----------------|---------|-----|----------|
+| Créer demande | ✅ Read/Write | ❌ Aucun accès | ❌ Aucun accès |
+| Voir ses demandes | ✅ Read | ❌ N/A | ❌ N/A |
+| Supprimer sa demande (pending) | ✅ Write | ❌ N/A | ❌ N/A |
+| Voir toutes les demandes | ❌ Aucun accès | ✅ Read Only | ❌ Aucun accès |
+| Valider/Rejeter demandes | ❌ Aucun accès | ✅ Write (statut uniquement) | ❌ Aucun accès |
+| Modifier contenu demandes | ❌ Non | ❌ Non | ❌ Non |
+
+### 📊 Modèle de Données
+
+```python
+# models.py
+class LeaveRequestCreate(BaseModel):
+    type: Literal["absence", "conge"]  # Type de demande
+    start_date: str  # Format: YYYY-MM-DD
+    end_date: str
+    reason: str
+    days_count: int
+
+class LeaveRequestUpdate(BaseModel):
+    status: Literal["pending", "approved", "rejected"]
+    hr_comment: Optional[str] = None
+
+class LeaveRequestResponse(BaseModel):
+    id: int
+    employee_id: int
+    employee_email: str
+    type: str
+    start_date: str
+    end_date: str
+    reason: str
+    days_count: int
+    status: str  # "pending", "approved", "rejected"
+    hr_comment: Optional[str] = None
+    created_at: str
+    updated_at: Optional[str] = None
+```
+
+### 🗄️ Schéma Base de Données
+
+```json
+{
+  "leave_requests": [
+    {
+      "employee_id": 3,
+      "employee_email": "abdoumerabet374@gmail.com",
+      "type": "conge",
+      "start_date": "2025-12-20",
+      "end_date": "2025-12-27",
+      "reason": "Congé familial",
+      "days_count": 7,
+      "status": "pending",
+      "hr_comment": null,
+      "created_at": "2025-12-16T10:30:00",
+      "updated_at": null
+    }
+  ]
+}
+```
+
+### 🔌 API Endpoints
+
+#### 1. Créer une Demande (Employé uniquement)
+
+```python
+@app.post("/leave-requests", response_model=dict)
+async def create_leave_request(
+    request_data: LeaveRequestCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Seuls les employés peuvent créer des demandes."""
+    if current_user['role'] != "employee":
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls les employés peuvent créer des demandes"
+        )
+    
+    request_id = db.create_leave_request(
+        employee_id=current_user.doc_id,
+        employee_email=current_user['email'],
+        type=request_data.type,
+        start_date=request_data.start_date,
+        end_date=request_data.end_date,
+        reason=request_data.reason,
+        days_count=request_data.days_count
+    )
+    
+    return {"message": "Demande créée avec succès", "request_id": request_id}
+```
+
+#### 2. Voir ses Propres Demandes (Employé)
+
+```python
+@app.get("/leave-requests/my-requests", response_model=List[LeaveRequestResponse])
+async def get_my_leave_requests(current_user: dict = Depends(get_current_user)):
+    """L'employé voit uniquement ses propres demandes."""
+    if current_user['role'] != "employee":
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    
+    requests = db.get_leave_requests_by_employee(current_user.doc_id)
+    return [LeaveRequestResponse(**req) for req in requests]
+```
+
+#### 3. Voir Toutes les Demandes (DRH uniquement)
+
+```python
+@app.get("/leave-requests/all", response_model=List[LeaveRequestResponse])
+async def get_all_leave_requests(current_user: dict = Depends(get_current_user)):
+    """Seul le DRH peut voir toutes les demandes."""
+    if current_user['role'] != "hr_manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Seul le DRH peut voir toutes les demandes"
+        )
+    
+    requests = db.get_all_leave_requests()
+    return [LeaveRequestResponse(**req) for req in requests]
+```
+
+#### 4. Valider/Rejeter une Demande (DRH uniquement)
+
+```python
+@app.put("/leave-requests/{request_id}/status")
+async def update_leave_request_status(
+    request_id: int,
+    update_data: LeaveRequestUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Seul le DRH peut valider/rejeter."""
+    if current_user['role'] != "hr_manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Seul le DRH peut valider les demandes"
+        )
+    
+    request = db.get_leave_request(request_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="Demande non trouvée")
+    
+    db.update_leave_request_status(
+        request_id=request_id,
+        status=update_data.status,
+        hr_comment=update_data.hr_comment
+    )
+    
+    return {"message": f"Demande {update_data.status} avec succès"}
+```
+
+#### 5. Supprimer sa Demande (Employé, si pending)
+
+```python
+@app.delete("/leave-requests/{request_id}")
+async def delete_leave_request(
+    request_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """L'employé peut supprimer uniquement ses demandes en attente."""
+    if current_user['role'] != "employee":
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    
+    request = db.get_leave_request(request_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="Demande non trouvée")
+    
+    if request['employee_id'] != current_user.doc_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Vous ne pouvez supprimer que vos propres demandes"
+        )
+    
+    if request['status'] != 'pending':
+        raise HTTPException(
+            status_code=400,
+            detail="Vous ne pouvez supprimer que les demandes en attente"
+        )
+    
+    db.delete_leave_request(request_id)
+    return {"message": "Demande supprimée avec succès"}
+```
+
+### 💻 Interface Frontend
+
+#### Employé - Formulaire de Création
+
+**Composant** : `LeaveRequestForm.jsx`
+
+**Fonctionnalités** :
+- Sélection type (Absence/Congé)
+- Sélection dates (début/fin)
+- Calcul automatique du nombre de jours
+- Zone de texte pour le motif
+- Liste de toutes ses demandes avec statuts
+- Suppression des demandes en attente
+- Visualisation des commentaires DRH
+
+```javascript
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await createLeaveRequest({
+      type: formData.type,
+      start_date: formData.start_date,
+      end_date: formData.end_date,
+      reason: formData.reason,
+      days_count: formData.days_count
+    });
+    setSuccess('Demande créée avec succès!');
+    fetchMyRequests();
+  } catch (err) {
+    setError(err.response?.data?.detail || 'Erreur');
+  }
+};
+```
+
+#### DRH - Gestion des Demandes
+
+**Composant** : `HRLeaveManagement.jsx`
+
+**Fonctionnalités** :
+- Vue d'ensemble avec statistiques (En attente/Approuvées/Rejetées)
+- Filtres par statut
+- Liste complète de toutes les demandes
+- Détails de chaque demande (employé, dates, motif)
+- Actions : Approuver/Rejeter avec commentaire
+- Interface read-only (pas de modification du contenu)
+
+```javascript
+const handleUpdateStatus = async (requestId, status) => {
+  try {
+    await updateLeaveRequestStatus(requestId, {
+      status,
+      hr_comment: hrComment || null
+    });
+    setSuccess(`Demande ${status === 'approved' ? 'approuvée' : 'rejetée'}!`);
+    fetchAllRequests();
+  } catch (err) {
+    setError(err.response?.data?.detail || 'Erreur');
+  }
+};
+```
+
+### 🔄 Flux de Travail
+
+```
+1. EMPLOYÉ crée demande
+   ↓
+2. Statut = "pending"
+   ↓
+3. DRH voit la demande
+   ↓
+4. DRH examine les détails
+   ↓
+5. DRH approuve OU rejette
+   │                    │
+   ↓                    ↓
+Statut = "approved"  Statut = "rejected"
+   +                    +
+Commentaire (opt.)   Commentaire (opt.)
+   ↓                    ↓
+6. EMPLOYÉ voit le résultat et le commentaire
+```
+
+### 🛡️ Sécurité et Contrôle d'Accès
+
+#### Vérifications Backend
+
+Chaque endpoint vérifie :
+1. **Authentification** : Token JWT valide
+2. **Autorisation** : Rôle correct via `current_user['role']`
+3. **Propriété** : L'utilisateur ne peut agir que sur ses ressources
+4. **État** : Certaines actions nécessitent un statut spécifique
+
+```python
+# Exemple de vérifications multiples
+def delete_leave_request(request_id, current_user):
+    # 1. Vérifier rôle
+    if current_user['role'] != "employee":
+        raise HTTPException(403)
+    
+    # 2. Vérifier existence
+    request = db.get_leave_request(request_id)
+    if not request:
+        raise HTTPException(404)
+    
+    # 3. Vérifier propriété
+    if request['employee_id'] != current_user.doc_id:
+        raise HTTPException(403)
+    
+    # 4. Vérifier statut
+    if request['status'] != 'pending':
+        raise HTTPException(400)
+    
+    # OK - supprimer
+    db.delete_leave_request(request_id)
+```
+
+#### Protection Frontend
+
+```javascript
+// Conditional rendering basé sur le rôle
+{user.role === 'employee' && (
+  <LeaveRequestForm />
+)}
+
+{user.role === 'hr_manager' && (
+  <HRLeaveManagement />
+)}
+
+{user.role === 'admin' && (
+  <p>Aucun accès aux demandes de congés</p>
+)}
+```
+
+### 📊 Cas d'Utilisation Complet
+
+**Scénario** : Employé demande un congé, DRH l'approuve
+
+1. **Employé** se connecte (`abdoumerabet374@gmail.com`)
+2. Va dans "📋 Demandes d'Absence/Congés"
+3. Remplit formulaire :
+   - Type : Congé
+   - Début : 2025-12-20
+   - Fin : 2025-12-27
+   - Jours : 7 (calculé auto)
+   - Motif : "Vacances de fin d'année"
+4. Clique "Soumettre la demande"
+5. Demande créée avec `status = "pending"`
+6. **DRH** se connecte (`zakarialaidi6@gmail.com`)
+7. Va dans "📋 Gestion des Demandes"
+8. Voit 1 demande en attente
+9. Clique "Traiter cette demande"
+10. Ajoute commentaire : "Approuvé, bon repos!"
+11. Clique "✅ Approuver"
+12. Statut mis à jour : `status = "approved"`
+13. **Employé** se reconnecte
+14. Voit sa demande avec badge vert "Approuvée"
+15. Lit le commentaire DRH
+
+---
+
+## �📊 Statistiques et Performance
 
 ### ⏱️ Temps d'Exécution Typiques
 
 | Opération | Temps Moyen | Notes |
 |-----------|-------------|-------|
-| Login (Step 1) | 200-500ms | Vérification password + envoi email |
-| OTP Verification | 50-100ms | Vérification DB + génération JWT |
+| Login (Step 1) | 200-500ms | Vérification password + envoi email + check tentatives |
+| Login Bloqué | 1-2ms | Vérification rapide du blocage |
+| OTP Verification | 50-100ms | Vérification DB + check tentatives + génération JWT |
+| OTP Resend | 200-400ms | Nouvelle génération + envoi email |
+| OTP Cancel | 5-10ms | Suppression DB |
 | DH Parameters Gen | 2-5s | Une fois au démarrage |
 | DH Key Exchange | 500-1000ms | Calculs modulaires lourds |
 | AES Encryption | 1-5ms | Très rapide |
 | AES Decryption | 1-5ms | Très rapide |
 | Message Storage | 10-20ms | Insertion DB |
+| Create Leave Request | 10-30ms | Insertion DB + vérifications |
+| Get All Requests (DRH) | 20-50ms | Lecture DB + transformation |
+| Update Request Status | 15-25ms | Mise à jour DB |
+| Delete Request | 10-15ms | Suppression DB |
 
 ### 💾 Taille des Données
 
@@ -1402,13 +1920,35 @@ Authorization: Bearer <token>
 
 ## 🎓 Conclusion
 
-Ce système démontre une implémentation complète de protocoles cryptographiques modernes pour sécuriser les communications dans une application web. Les concepts clés incluent :
+Ce système démontre une implémentation complète de protocoles cryptographiques modernes combinée à une gestion robuste des accès et de la sécurité applicative. Les concepts clés incluent :
 
+### 🔒 Sécurité Cryptographique
 1. **Authentification forte** avec MFA (OTP)
 2. **Échange de clés sécurisé** avec Diffie-Hellman
-3. **Chiffrement symétrique** avec AES-256
+3. **Chiffrement symétrique** avec AES-256-CBC
 4. **Architecture Zero-Knowledge** (clés privées jamais transmises)
-5. **Séparation des rôles** (Admin, RH, Employé)
+5. **Hachage sécurisé** avec Bcrypt pour les mots de passe
+
+### 🛡️ Sécurité Applicative
+6. **Protection anti-brute force** (limitation tentatives login/OTP)
+7. **Messages d'erreur spécifiques** (évite énumération utilisateurs)
+8. **Gestion intelligente des OTP** (renvoi, annulation, expiration)
+9. **Tokens JWT** pour authentification stateless
+10. **Blocages temporaires** automatiques après abus
+
+### 👥 Contrôle d'Accès
+11. **RBAC (Role-Based Access Control)** strict
+12. **Séparation des rôles** (Admin, DRH, Employé)
+13. **Permissions granulaires** (Read/Write par fonctionnalité)
+14. **Isolation des données** (employé voit uniquement ses ressources)
+15. **Gestion de workflow** métier (demandes d'absence/congés)
+
+### 📊 Fonctionnalités Métier
+16. **Gestion des demandes** d'absence et de congés
+17. **Workflow de validation** par le DRH
+18. **Traçabilité** (statuts, commentaires, timestamps)
+19. **Interface utilisateur** adaptée par rôle
+20. **Calculs automatiques** (nombre de jours, etc.)
 
 ### 🚀 Extensions Possibles
 
@@ -1417,9 +1957,15 @@ Ce système démontre une implémentation complète de protocoles cryptographiqu
 3. **Perfect Forward Secrecy** : Rotation des clés DH
 4. **Audit Logs** : Traçabilité complète des actions
 5. **Multi-RH** : Support de plusieurs managers
-6. **Notifications** : Alertes temps réel
+6. **Notifications** : Alertes temps réel (email/push)
 7. **Mobile App** : Interface native iOS/Android
 8. **Blockchain** : Horodatage immuable des actions
+9. **Workflow Avancé** : Approbation multi-niveaux (manager → DRH)
+10. **Calendrier** : Visualisation des absences d'équipe
+11. **Exports** : Génération de rapports PDF/Excel
+12. **API Rate Limiting** : Protection globale contre les abus
+13. **2FA Matériel** : Support des clés FIDO2/WebAuthn
+14. **Historique des Modifications** : Audit trail des demandes
 
 ### 📚 Références
 

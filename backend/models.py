@@ -78,8 +78,35 @@ class MessageInDB(BaseModel):
     from_id: int
     to_id: int
     encrypted_content: str
-    iv: str
-    timestamp: str
+
+
+# Leave/Absence Request Models
+class LeaveRequestCreate(BaseModel):
+    type: Literal["absence", "conge"]  # Type de demande
+    start_date: str  # Format: YYYY-MM-DD
+    end_date: str
+    reason: str
+    days_count: int
+
+
+class LeaveRequestUpdate(BaseModel):
+    status: Literal["pending", "approved", "rejected"]
+    hr_comment: Optional[str] = None
+
+
+class LeaveRequestResponse(BaseModel):
+    id: int
+    employee_id: int
+    employee_email: str
+    type: str
+    start_date: str
+    end_date: str
+    reason: str
+    days_count: int
+    status: str
+    hr_comment: Optional[str] = None
+    created_at: str
+    updated_at: Optional[str] = None
 
 
 # OTP Models

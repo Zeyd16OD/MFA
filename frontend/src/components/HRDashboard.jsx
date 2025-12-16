@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { getReceivedMessages, decryptMessage } from '../api';
+import HRLeaveManagement from './HRLeaveManagement';
 
 const HRDashboard = ({ user, onLogout }) => {
+  const [activeTab, setActiveTab] = useState('leave-management'); // 'leave-management' or 'messages'
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [decryptedMessages, setDecryptedMessages] = useState({});
@@ -64,22 +66,46 @@ const HRDashboard = ({ user, onLogout }) => {
       </div>
 
       <div className="container mx-auto p-6">
-        {/* Status Banner */}
-        {status && (
-          <div className="p-4 rounded-2xl mb-6" style={{
-            backgroundColor: status.includes('❌') ? 'var(--md-sys-color-error-container)' :
-              status.includes('✅') ? 'var(--md-sys-color-tertiary-container)' :
-              'var(--md-sys-color-secondary-container)',
-            color: status.includes('❌') ? 'var(--md-sys-color-on-error-container)' :
-              status.includes('✅') ? 'var(--md-sys-color-on-tertiary-container)' :
-              'var(--md-sys-color-on-secondary-container)'
-          }}>
-            {status}
-          </div>
-        )}
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setActiveTab('leave-management')}
+            className={`px-6 py-3 rounded-lg font-medium ${
+              activeTab === 'leave-management' ? 'btn-primary' : 'btn-secondary'
+            }`}
+          >
+            📋 Gestion des Demandes
+          </button>
+          <button
+            onClick={() => setActiveTab('messages')}
+            className={`px-6 py-3 rounded-lg font-medium ${
+              activeTab === 'messages' ? 'btn-primary' : 'btn-secondary'
+            }`}
+          >
+            📬 Messages Chiffrés
+          </button>
+        </div>
 
-        {/* Messages List */}
-        <div className="card">
+        {activeTab === 'leave-management' ? (
+          <HRLeaveManagement />
+        ) : (
+          <>
+            {/* Status Banner */}
+            {status && (
+              <div className="p-4 rounded-2xl mb-6" style={{
+                backgroundColor: status.includes('❌') ? 'var(--md-sys-color-error-container)' :
+                  status.includes('✅') ? 'var(--md-sys-color-tertiary-container)' :
+                  'var(--md-sys-color-secondary-container)',
+                color: status.includes('❌') ? 'var(--md-sys-color-on-error-container)' :
+                  status.includes('✅') ? 'var(--md-sys-color-on-tertiary-container)' :
+                  'var(--md-sys-color-on-secondary-container)'
+              }}>
+                {status}
+              </div>
+            )}
+
+            {/* Messages List */}
+            <div className="card">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold" style={{ color: 'var(--md-sys-color-on-surface)' }}>📬 Encrypted Leave Requests</h2>
             <button
@@ -170,6 +196,8 @@ const HRDashboard = ({ user, onLogout }) => {
             <li>• Original encryption keys are never transmitted over the network</li>
           </ul>
         </div>
+          </>
+        )}
       </div>
     </div>
   );

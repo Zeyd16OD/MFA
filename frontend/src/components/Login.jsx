@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { login, verifyOTP } from '../api';
+import { login, verifyOTP, resendOTP, cancelOTP } from '../api';
 
 const Login = ({ onLoginSuccess }) => {
   const [step, setStep] = useState(1); // 1: email/password, 2: OTP
@@ -8,6 +8,7 @@ const Login = ({ onLoginSuccess }) => {
   const [otpCode, setOtpCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showResendButton, setShowResendButton] = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -29,6 +30,7 @@ const Login = ({ onLoginSuccess }) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    setShowResendButton(false);
 
     try {
       const response = await verifyOTP(email, otpCode);
@@ -40,8 +42,48 @@ const Login = ({ onLoginSuccess }) => {
       // Notify parent component
       onLoginSuccess(token);
     } catch (err) {
-      setError(err.response?.data?.detail || 'OTP verification failed');
+      const errorMessage = err.response?.data?.detail || 'OTP verification failed';
+      setError(errorMessage);
+      
+      // Show resend button if OTP is invalid (not if blocked)
+      if (!errorMessage.includes('Trop de tentatives')) {
+        setShowResendButton(true);
+      }
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendOTP = async () => {
+    setError('');
+    setLoading(true);
+    setShowResendButton(false);
+    setOtpCode('');
+
+    try {
+      const response = await resendOTP(email, password);
+      setError('');
+      alert(response.data.message || 'Nouveau code OTP envoyé!');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to resend OTP');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBackToLogin = async () => {
+    setLoading(true);
+    try {
+      // Cancel the OTP session
+      await cancelOTP(email);
+    } catch (err) {
+      console.error('Error cancelling OTP:', err);
+    } finally {
+      // Reset form state
+      setStep(1);
+      setOtpCode('');
+      setError('');
+      setShowResendButton(false);
       setLoading(false);
     }
   };
@@ -138,10 +180,26 @@ const Login = ({ onLoginSuccess }) => {
               {loading ? 'Verifying...' : 'Verify OTP'}
             </button>
 
+            {showResendButton && (
+              <button
+                type="button"
+                onClick={handleResendOTP}
+                disabled={loading}
+                className="btn-secondary w-full mt-3 disabled:opacity-50"
+                style={{ 
+                  backgroundColor: 'var(--md-sys-color-secondary-container)',
+                  color: 'var(--md-sys-color-on-secondary-container)'
+                }}
+              >
+                {loading ? 'Envoi...' : 'Re-envoyer l\'OTP'}
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => setStep(1)}
-              className="btn-secondary w-full mt-3"
+              onClick={handleBackToLogin}
+              disabled={loading}
+              className="btn-secondary w-full mt-3 disabled:opacity-50"
             >
               Back to Login
             </button>

@@ -8,8 +8,10 @@ import {
   aesEncrypt,
   bigIntToHex,
 } from '../crypto';
+import LeaveRequestForm from './LeaveRequestForm';
 
 const EmployeeDashboard = ({ user, onLogout }) => {
+  const [activeTab, setActiveTab] = useState('leave-requests'); // 'leave-requests' or 'messaging'
   const [dhParams, setDhParams] = useState(null);
   const [privateKey, setPrivateKey] = useState(null);
   const [publicKey, setPublicKey] = useState(null);
@@ -155,21 +157,45 @@ const EmployeeDashboard = ({ user, onLogout }) => {
       </div>
 
       <div className="container mx-auto p-6">
-        {/* Status Banner */}
-        {status && (
-          <div className="p-4 rounded-2xl mb-6" style={{
-            backgroundColor: status.includes('❌') ? 'var(--md-sys-color-error-container)' :
-              status.includes('✅') || status.includes('🎉') ? 'var(--md-sys-color-tertiary-container)' :
-              'var(--md-sys-color-primary-container)',
-            color: status.includes('❌') ? 'var(--md-sys-color-on-error-container)' :
-              status.includes('✅') || status.includes('🎉') ? 'var(--md-sys-color-on-tertiary-container)' :
-              'var(--md-sys-color-on-primary-container)'
-          }}>
-            {status}
-          </div>
-        )}
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setActiveTab('leave-requests')}
+            className={`px-6 py-3 rounded-lg font-medium ${
+              activeTab === 'leave-requests' ? 'btn-primary' : 'btn-secondary'
+            }`}
+          >
+            📋 Demandes d'Absence/Congés
+          </button>
+          <button
+            onClick={() => setActiveTab('messaging')}
+            className={`px-6 py-3 rounded-lg font-medium ${
+              activeTab === 'messaging' ? 'btn-primary' : 'btn-secondary'
+            }`}
+          >
+            💬 Messagerie Sécurisée
+          </button>
+        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {activeTab === 'leave-requests' ? (
+          <LeaveRequestForm />
+        ) : (
+          <>
+            {/* Status Banner */}
+            {status && (
+              <div className="p-4 rounded-2xl mb-6" style={{
+                backgroundColor: status.includes('❌') ? 'var(--md-sys-color-error-container)' :
+                  status.includes('✅') || status.includes('🎉') ? 'var(--md-sys-color-tertiary-container)' :
+                  'var(--md-sys-color-primary-container)',
+                color: status.includes('❌') ? 'var(--md-sys-color-on-error-container)' :
+                  status.includes('✅') || status.includes('🎉') ? 'var(--md-sys-color-on-tertiary-container)' :
+                  'var(--md-sys-color-on-primary-container)'
+              }}>
+                {status}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Key Exchange Section */}
           <div className="card">
             <h2 className="text-xl font-bold mb-4" style={{ color: 'var(--md-sys-color-on-surface)' }}>🔐 Secure Key Exchange</h2>
@@ -315,6 +341,8 @@ const EmployeeDashboard = ({ user, onLogout }) => {
             <li>• Your private key never leaves your browser</li>
           </ul>
         </div>
+          </>
+        )}
       </div>
     </div>
   );
