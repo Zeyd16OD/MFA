@@ -495,11 +495,95 @@ async def decrypt_message(
             "from_id": message['from_id'],
             "timestamp": message['timestamp']
         }
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Échec du déchiffrement: Ce message a été chiffré avec une clé différente. "
+                   "Il s'agit probablement d'un ancien message incompatible. "
+                   "Veuillez effectuer un nouvel échange de clés DH ou supprimer ce message."
+        )
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Échec du déchiffrement: Le contenu déchiffré n'est pas un JSON valide. "
+                   "Message corrompu ou clé incorrecte."
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Decryption failed: {str(e)}"
+            detail=f"Échec du déchiffrement: {str(e)}"
         )
+
+
+@app.delete("/messages/{message_id}")
+async def delete_message(
+    message_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Supprimer un message. HR Manager et Admin peuvent supprimer.
+    """
+    if current_user['role'] not in ["hr_manager", "admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seuls le DRH et l'Admin peuvent supprimer des messages"
+        )
+    
+    message = db.messages.get(doc_id=message_id)
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message non trouvé"
+        )
+    
+    db.messages.remove(doc_ids=[message_id])
+    
+    return {"message": "Message supprimé avec succès"}
+
+
+@app.post("/messages/cleanup-incompatible")
+async def cleanup_incompatible_messages(current_user: dict = Depends(get_current_user)):
+    """
+    Tester et nettoyer les messages incompatibles (ne peuvent pas être déchiffrés).
+    """
+    if current_user['role'] not in ["hr_manager", "admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès refusé"
+        )
+    
+    # Get HR's session
+    hr_session = db.get_session(current_user.doc_id)
+    if not hr_session or not hr_session.get('shared_secret'):
+        return {
+            "message": "Aucun secret partagé. Impossible de tester les messages.",
+            "deleted_count": 0
+        }
+    
+    # Derive AES key
+    shared_secret = int(hr_session['shared_secret'], 16)
+    aes_key = derive_aes_key_from_secret(shared_secret)
+    
+    # Test all messages
+    all_messages = db.messages.all()
+    incompatible_ids = []
+    
+    for msg in all_messages:
+        try:
+            decrypted = aes_decrypt(msg['encrypted_content'], msg['iv'], aes_key)
+            json.loads(decrypted)  # Verify it's valid JSON
+        except:
+            incompatible_ids.append(msg.doc_id)
+    
+    # Delete incompatible messages
+    if incompatible_ids:
+        db.messages.remove(doc_ids=incompatible_ids)
+    
+    return {
+        "message": f"{len(incompatible_ids)} message(s) incompatible(s) supprimé(s)",
+        "deleted_count": len(incompatible_ids),
+        "deleted_ids": incompatible_ids
+    }
 
 
 # ==================== LEAVE/ABSENCE REQUEST ENDPOINTS ====================

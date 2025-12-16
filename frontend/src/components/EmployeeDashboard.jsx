@@ -173,7 +173,7 @@ const EmployeeDashboard = ({ user, onLogout }) => {
               activeTab === 'messaging' ? 'btn-primary' : 'btn-secondary'
             }`}
           >
-            💬 Messagerie Sécurisée
+            � Messagerie Sécurisée
           </button>
         </div>
 

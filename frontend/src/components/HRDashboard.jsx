@@ -39,7 +39,54 @@ const HRDashboard = ({ user, onLogout }) => {
       });
       setStatus('✅ Message decrypted successfully');
     } catch (err) {
-      setStatus('❌ Decryption failed: ' + (err.response?.data?.detail || err.message));
+      const errorDetail = err.response?.data?.detail || err.message;
+      setStatus('❌ ' + errorDetail);
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteMessage = async (messageId) => {
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer ce message?')) {
+      return;
+    }
+
+    try {
+      await fetch(`http://localhost:8000/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      setStatus('✅ Message supprimé');
+      fetchMessages();
+    } catch (err) {
+      setStatus('❌ Échec de la suppression');
+      console.error(err);
+    }
+  };
+
+  const handleCleanupIncompatible = async () => {
+    if (!window.confirm('Supprimer tous les messages incompatibles (anciens messages qui ne peuvent plus être déchiffrés)?')) {
+      return;
+    }
+
+    setLoading(true);
+    setStatus('🔄 Nettoyage en cours...');
+
+    try {
+      const response = await fetch('http://localhost:8000/messages/cleanup-incompatible', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      const data = await response.json();
+      setStatus(`✅ ${data.message}`);
+      fetchMessages();
+    } catch (err) {
+      setStatus('❌ Échec du nettoyage');
       console.error(err);
     } finally {
       setLoading(false);
@@ -108,13 +155,26 @@ const HRDashboard = ({ user, onLogout }) => {
             <div className="card">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold" style={{ color: 'var(--md-sys-color-on-surface)' }}>📬 Encrypted Leave Requests</h2>
-            <button
-              onClick={fetchMessages}
-              disabled={loading}
-              className="btn-secondary disabled:opacity-50"
-            >
-              🔄 Refresh
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleCleanupIncompatible}
+                disabled={loading}
+                className="px-4 py-2 rounded-full text-sm transition disabled:opacity-50"
+                style={{ 
+                  backgroundColor: 'var(--md-sys-color-error)',
+                  color: 'var(--md-sys-color-on-error)'
+                }}
+              >
+                🧹 Nettoyer les incompatibles
+              </button>
+              <button
+                onClick={fetchMessages}
+                disabled={loading}
+                className="btn-secondary disabled:opacity-50"
+              >
+                🔄 Refresh
+              </button>
+            </div>
           </div>
 
           {loading && messages.length === 0 ? (
@@ -137,17 +197,31 @@ const HRDashboard = ({ user, onLogout }) => {
                         {new Date(msg.timestamp).toLocaleString()}
                       </p>
                     </div>
-                    <button
-                      onClick={() => handleDecrypt(msg.id)}
-                      disabled={loading || decryptedMessages[msg.id]}
-                      className="px-4 py-2 rounded-full text-sm transition disabled:opacity-50"
-                      style={{ 
-                        backgroundColor: decryptedMessages[msg.id] ? 'var(--md-sys-color-tertiary-container)' : 'var(--md-sys-color-tertiary)',
-                        color: decryptedMessages[msg.id] ? 'var(--md-sys-color-on-tertiary-container)' : 'var(--md-sys-color-on-tertiary)'
-                      }}
-                    >
-                      {decryptedMessages[msg.id] ? '✅ Decrypted' : '🔓 Decrypt'}
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleDecrypt(msg.id)}
+                        disabled={loading || decryptedMessages[msg.id]}
+                        className="px-4 py-2 rounded-full text-sm transition disabled:opacity-50"
+                        style={{ 
+                          backgroundColor: decryptedMessages[msg.id] ? 'var(--md-sys-color-tertiary-container)' : 'var(--md-sys-color-tertiary)',
+                          color: decryptedMessages[msg.id] ? 'var(--md-sys-color-on-tertiary-container)' : 'var(--md-sys-color-on-tertiary)'
+                        }}
+                      >
+                        {decryptedMessages[msg.id] ? '✅ Decrypted' : '🔓 Decrypt'}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteMessage(msg.id)}
+                        disabled={loading}
+                        className="px-3 py-2 rounded-full text-sm transition disabled:opacity-50"
+                        style={{ 
+                          backgroundColor: 'var(--md-sys-color-error-container)',
+                          color: 'var(--md-sys-color-on-error-container)'
+                        }}
+                        title="Supprimer ce message"
+                      >
+                        🗑️
+                      </button>
+                    </div>
                   </div>
 
                   {decryptedMessages[msg.id] ? (
