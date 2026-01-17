@@ -3,8 +3,9 @@
 ## 🎯 Vue d'Ensemble
 
 Système de gestion RH qui implémente une communication sécurisée end-to-end entre employés et responsables RH utilisant :
-- **Authentification Multi-Facteurs (MFA)** via OTP email
-- **Échange de clés Diffie-Hellman** pour établir un canal sécurisé
+- **Authentification Multi-Facteurs (MFA)** via OTP email avec protection brute-force
+- **Autorisation Admin** pour valider les demandes avant établissement du canal sécurisé
+- **Échange de clés Diffie-Hellman** généré côté serveur après approbation Admin
 - **Chiffrement AES-256-CBC** pour les données sensibles
 
 ### Technologies
@@ -70,9 +71,9 @@ Système de gestion RH qui implémente une communication sécurisée end-to-end 
 
 | Rôle | Email | Permissions |
 |------|-------|-------------|
-| **Admin** | zeydody@gmail.com | Créer utilisateurs, voir statistiques |
-| **HR Manager** | zakarialaidi6@gmail.com | Déchiffrer messages, consulter demandes |
-| **Employee** | abdoumerabet374@gmail.com | Soumettre demandes chiffrées |
+| **Admin** | zeydody@gmail.com | Créer utilisateurs, autoriser/refuser les communications, voir statistiques |
+| **HR Manager** | zakarialaidi6@gmail.com | Déchiffrer messages, consulter demandes approuvées |
+| **Employee** | abdoumerabet374@gmail.com | Soumettre demandes de congé (requiert autorisation Admin) |
 
 ---
 
@@ -108,69 +109,66 @@ Employé              Frontend            Backend              SMTP             
    │                    │  (localStorage)   │                   │                      │
 ```
 
-### 2. Échange de Clés Diffie-Hellman
+### 2. Autorisation Admin et Échange de Clés DH (Côté Serveur)
 
 ```
-Employé              Frontend                    Backend (RH)                  Base de Données
-   │                    │                              │                              │
-   │─ Click "Key Exch" ┤                              │                              │
-   │                    │─ GET /handshake/params ──────>│                              │
-   │                    │<─ {p, g} ────────────────────│<─ Fetch DH params ──────────┤
-   │                    │                              │                              │
-   │                    │─ Generate private key 'a'    │                              │
-   │                    │  (random, never transmitted) │                              │
-   │                    │─ Calculate A = g^a mod p     │                              │
-   │                    │                              │                              │
-   │                    │─ POST /handshake/exchange ───>│                              │
-   │                    │  {public_key: A}             │                              │
-   │                    │                              │─ Generate private key 'b' ───┤
-   │                    │                              │<─ Store session ─────────────┤
-   │                    │                              │─ Calculate B = g^b mod p     │
-   │                    │                              │─ Calculate S = A^b mod p     │
-   │                    │                              │─ Store secret S ─────────────>│
-   │                    │<─ {public_key: B} ───────────│                              │
-   │                    │                              │                              │
-   │                    │─ Calculate S = B^a mod p     │                              │
-   │                    │  (same secret as backend!)   │                              │
-   │                    │─ Derive AES key = SHA256(S)  │                              │
-   │<─ "Key Exchange OK"│                              │                              │
-   │                    │                              │                              │
+Employé              Admin                   Backend                    HR Manager           Base de Données
+   │                    │                       │                           │                      │
+   │─ Submit leave ────>│                       │                           │                      │
+   │                    │                       │─ Store request ───────────┤                      │
+   │                    │                       │─ Create auth pending ─────┤                      │
+   │                    │                       │                           │                      │
+   │                    │<─ View pending ───────│                           │                      │
+   │                    │                       │                           │                      │
+   │                    │─ Approve request ────>│                           │                      │
+   │                    │                       │─ Fetch DH params (p, g) ──┤                      │
+   │                    │                       │─ Generate private key 'a' │                      │
+   │                    │                       │─ Generate private key 'b' │                      │
+   │                    │                       │─ Calculate A = g^a mod p  │                      │
+   │                    │                       │─ Calculate B = g^b mod p  │                      │
+   │                    │                       │─ Calculate S = A^b mod p  │                      │
+   │                    │                       │─ Derive AES key = SHA256(S)                      │
+   │                    │                       │─ Encrypt message with AES │                      │
+   │                    │                       │─ Store encrypted message ─┤                      │
+   │                    │                       │─ Update status: approved ─┤                      │
+   │                    │                       │                           │                      │
+   │                    │                       │                          <│─ GET /leave-requests │
+   │                    │                       │──────────────────────────>│  (approved only)     │
+   │                    │                       │                           │                      │
    
-Note: Les deux parties ont maintenant le même secret S sans l'avoir jamais transmis !
+Note: Les clés DH sont générées côté serveur après approbation Admin.
+L'employé n'effectue plus d'échange de clés - tout est automatisé après autorisation.
 ```
 
-### 3. Envoi et Déchiffrement de Message
+### 3. Flux Complet : Soumission → Autorisation → Chiffrement → Consultation
 
 ```
-Employé              Frontend                Backend               HR Manager           Base de Données
-   │                    │                       │                       │                      │
-   │─ Fill leave form ─>│                       │                       │                      │
-   │                    │─ Convert to JSON      │                       │                      │
-   │                    │─ Generate random IV   │                       │                      │
-   │                    │─ Encrypt with AES key │                       │                      │
-   │                    │  (derived from S)     │                       │                      │
-   │                    │                       │                       │                      │
-   │                    │─ POST /requests/leave ┤                       │                      │
-   │                    │  {encrypted, iv}      │                       │                      │
-   │                    │                       │─ Store encrypted msg ─┤                      │
-   │                    │<─ "Success" ──────────│                       │                      │
-   │                    │                       │                       │                      │
-   │                    │                       │                       │                      │
-   │                    │                       │<─ Login (MFA) ────────│                      │
-   │                    │                       │                       │                      │
-   │                    │                       │<─ GET /messages ──────│                      │
-   │                    │                       │─ Fetch encrypted ─────┤                      │
-   │                    │                       │<─ List messages ───────                      │
-   │                    │                       │──────────────────────>│                      │
-   │                    │                       │                       │                      │
-   │                    │                       │<─ POST /messages/1/decrypt                   │
-   │                    │                       │─ Get session secret S ┤                      │
-   │                    │                       │<─ Fetch secret ────────                      │
-   │                    │                       │─ Derive AES key       │                      │
-   │                    │                       │─ Decrypt message      │                      │
-   │                    │                       │──────────────────────>│                      │
-   │                    │                       │  {decrypted: {...}}   │                      │
-   │                    │                       │                       │<─ View plaintext ────│
+Employé              Admin                   Backend                    HR Manager           Base de Données
+   │                    │                       │                           │                      │
+   │─ Fill leave form ─>│                       │                           │                      │
+   │  (plaintext)       │                       │                           │                      │
+   │─ POST /leave-requests ────────────────────>│                           │                      │
+   │                    │                       │─ Store leave request ─────┤                      │
+   │                    │                       │─ Create comm auth (pending)──────────────────────┤
+   │<─ "Demande soumise"│                       │                           │                      │
+   │                    │                       │                           │                      │
+   │                    │<─ GET /comm-auth/pending                          │                      │
+   │                    │                       │<─ List pending ───────────┤                      │
+   │                    │                       │                           │                      │
+   │                    │─ PUT /comm-auth/{id} ─>│                           │                      │
+   │                    │  {status: "approved"} │                           │                      │
+   │                    │                       │─ Generate DH keys (a, b)  │                      │
+   │                    │                       │─ Compute shared secret S  │                      │
+   │                    │                       │─ Derive AES key from S    │                      │
+   │                    │                       │─ Encrypt leave request    │                      │
+   │                    │                       │─ Create encrypted message ┤                      │
+   │                    │                       │─ Update status + store ───┤                      │
+   │                    │<─ "Approved" ─────────│                           │                      │
+   │                    │                       │                           │                      │
+   │                    │                       │<─ GET /leave-requests/all │                      │
+   │                    │                       │  (filter: approved only)  │                      │
+   │                    │                       │──────────────────────────>│                      │
+   │                    │                       │                           │<─ View requests ─────│
 ```
 
 ---
@@ -195,24 +193,29 @@ Employé              Frontend                Backend               HR Manager  
 - OTP usage unique et temporaire
 - JWT signé cryptographiquement (HS256)
 
-### 2. Échange de Clés Diffie-Hellman
+### 2. Autorisation Admin + Génération DH Côté Serveur
 
-**Description** : Protocole permettant d'établir un secret partagé sans le transmettre.
+**Description** : L'Admin contrôle l'établissement des communications sécurisées. Les clés DH sont générées côté serveur après approbation.
 
 **Processus** :
-1. TTP génère paramètres publics `p` (prime 1536 bits) et `g` (générateur = 2)
-2. Client génère clé privée `a` (locale, jamais envoyée)
-3. Client calcule clé publique `A = g^a mod p` et l'envoie
-4. Serveur génère clé privée `b` et calcule `B = g^b mod p`
-5. Serveur calcule secret `S = A^b mod p`
-6. Client calcule secret `S = B^a mod p`
-7. Les deux ont le même secret `S` !
+1. Employé soumet une demande de congé (texte clair)
+2. Système crée une demande d'autorisation en attente
+3. Admin consulte les demandes en attente
+4. Admin approuve ou refuse la demande
+5. Si approuvé :
+   - Serveur récupère paramètres DH `p` et `g`
+   - Serveur génère clés privées `a` et `b`
+   - Serveur calcule `A = g^a mod p` et `B = g^b mod p`
+   - Serveur calcule secret partagé `S = A^b mod p`
+   - Serveur dérive clé AES et chiffre le message
+   - Message chiffré stocké et visible par RH
+6. Si refusé : aucune communication établie
 
-**Mathématiques** :
+**Mathématiques** (côté serveur) :
 ```
-S_client = B^a mod p = (g^b)^a mod p = g^(ab) mod p
-S_server = A^b mod p = (g^a)^b mod p = g^(ab) mod p
-=> S_client = S_server
+S = A^b mod p = (g^a)^b mod p = g^(ab) mod p
+AES_key = SHA-256(S)
+ciphertext = AES-256-CBC(plaintext, AES_key, IV)
 ```
 
 ### 3. Chiffrement AES-256-CBC
@@ -233,34 +236,36 @@ S_server = A^b mod p = (g^a)^b mod p = g^(ab) mod p
 
 ### 4. Gestion des Rôles
 
-**Description** : Contrôle d'accès basé sur les rôles (RBAC).
+**Description** : Contrôle d'accès basé sur les rôles (RBAC) avec workflow d'autorisation.
 
 | Rôle | Permissions |
 |------|-------------|
-| **Employee** | • Effectuer key exchange<br>• Envoyer messages chiffrés<br>• Consulter ses propres demandes |
-| **HR Manager** | • Recevoir messages chiffrés<br>• Déchiffrer les messages<br>• Consulter toutes les demandes |
-| **Admin** | • Créer de nouveaux utilisateurs<br>• Voir statistiques système<br>• Consulter tous les messages (chiffrés) |
+| **Employee** | • Soumettre demandes de congé<br>• Consulter statut de ses demandes<br>• Voir historique des autorisations |
+| **HR Manager** | • Consulter demandes approuvées<br>• Déchiffrer les messages<br>• Gérer les demandes de congé |
+| **Admin** | • Créer de nouveaux utilisateurs<br>• **Approuver/Refuser les demandes de communication**<br>• Voir statistiques système<br>• Déclencher la génération DH et le chiffrement |
 
 **Implémentation** :
 - JWT contient le rôle de l'utilisateur
 - Backend vérifie le rôle avant chaque action
 - Frontend adapte l'interface selon le rôle
 
-### 5. Communication Sécurisée
+### 5. Communication Sécurisée avec Autorisation Admin
 
-**Description** : End-to-end encryption pour les demandes de congé.
+**Description** : Communication sécurisée contrôlée par l'Admin avant établissement du canal chiffré.
 
 **Garanties** :
-- **Confidentialité** : Seul le RH peut lire (possède le secret)
+- **Contrôle d'accès** : Admin valide chaque communication avant chiffrement
+- **Confidentialité** : Seul le RH peut lire (après déchiffrement)
 - **Intégrité** : Modification détectée (échec déchiffrement)
-- **Authentification** : JWT vérifie l'identité
-- **Non-répudiation** : Messages horodatés et signés
+- **Authentification** : JWT vérifie l'identité à chaque étape
+- **Traçabilité** : Historique des autorisations conservé
 
 **Flux complet** :
 ```
-Employee → [Plaintext] → AES Encrypt → [Ciphertext + IV] 
-    → Network → Backend → Database (stockage chiffré)
-    → HR Request → Backend retrieve → AES Decrypt → [Plaintext] → HR Manager
+Employee → [Plaintext] → Backend (stockage temporaire)
+    → Admin Review → Approve/Reject
+    → If Approved: DH Key Gen → AES Encrypt → [Ciphertext + IV]
+    → Database (stockage chiffré) → HR Request → AES Decrypt → HR Manager
 ```
 
 ---
@@ -268,22 +273,27 @@ Employee → [Plaintext] → AES Encrypt → [Ciphertext + IV]
 ## 📡 API Endpoints
 
 ### Authentification
-- `POST /auth/login` - Envoyer OTP
-- `POST /auth/verify-otp` - Vérifier OTP et obtenir JWT
+- `POST /auth/login` - Envoyer OTP (avec protection brute-force)
+- `POST /auth/verify-otp` - Vérifier OTP et obtenir JWT (invalidation si échec)
 - `GET /auth/me` - Informations utilisateur connecté
 
-### Diffie-Hellman
-- `GET /handshake/params` - Récupérer paramètres DH (p, g)
-- `POST /handshake/exchange` - Échanger clés publiques
+### Autorisations Communication (Admin)
+- `GET /communication-auth/pending` - Liste des autorisations en attente
+- `GET /communication-auth/all` - Historique complet des autorisations
+- `PUT /communication-auth/{id}` - Approuver/Refuser une demande
+
+### Demandes de Congé
+- `POST /leave-requests` - Soumettre demande (crée autorisation en attente)
+- `GET /leave-requests/all` - Liste demandes (filtre: approuvées seulement pour RH)
+- `GET /leave-requests/my` - Mes demandes (employé)
 
 ### Messagerie
-- `POST /requests/leave` - Soumettre demande chiffrée
-- `GET /messages/received` - Liste messages reçus
+- `GET /messages/received` - Liste messages reçus (RH)
 - `POST /messages/{id}/decrypt` - Déchiffrer un message (RH)
 
 ### Administration
 - `POST /admin/users` - Créer utilisateur (Admin)
-- `GET /admin/messages` - Voir tous les messages (Admin)
+- `GET /admin/stats` - Statistiques système (Admin)
 
 ---
 
@@ -303,44 +313,16 @@ Employee → [Plaintext] → AES Encrypt → [Ciphertext + IV]
 
 ### Principes Appliqués
 
-1. **Defense in Depth** : Multiples couches de sécurité (MFA + DH + AES)
-2. **Zero-Knowledge** : Clés privées ne quittent jamais les clients
-3. **Perfect Forward Secrecy** : Compromission d'un secret n'affecte pas les autres
+1. **Defense in Depth** : Multiples couches de sécurité (MFA + Autorisation Admin + DH + AES)
+2. **Contrôle Centralisé** : Admin valide toute communication avant chiffrement
+3. **Perfect Forward Secrecy** : Clés DH générées à chaque approbation
 4. **Least Privilege** : Utilisateurs ont seulement les permissions nécessaires
 5. **Separation of Concerns** : Couches distinctes (API, sécurité, données)
+6. **Brute-Force Protection** : OTP invalidé après échec de vérification
 
 ---
 
-## 🎯 Cas d'Utilisation
-
-### Scénario : Employé soumet demande de congé
-
-1. **Connexion** : MFA avec email + OTP
-2. **Établissement canal** : Key exchange DH (~3 secondes)
-3. **Création demande** : Formulaire (dates, raison, durée)
-4. **Chiffrement** : AES-256 avec clé dérivée du secret DH
-5. **Transmission** : Message chiffré + IV envoyés au backend
-6. **Stockage** : Base de données (format chiffré uniquement)
-7. **Notification** : RH voit nouvelle demande (chiffrée)
-8. **Déchiffrement** : RH utilise son secret DH pour déchiffrer
-9. **Traitement** : RH lit la demande en clair et décide
-
-**Temps total** : < 10 secondes (dont 3s pour key exchange)
-
----
-
-## 📊 Performance
-
-| Opération | Temps Moyen |
-|-----------|-------------|
-| Login + OTP | 300ms |
-| Key Exchange DH | 1 seconde |
-| Chiffrement AES | 2ms |
-| Déchiffrement AES | 2ms |
-
----
-
-## 🚀 Technologies
+## �🚀 Technologies
 
 **Backend**
 ```
@@ -361,27 +343,3 @@ Axios 1.6.5
 Web Crypto API (native)
 ```
 
----
-
-## 📝 Conclusion
-
-Ce système démontre une implémentation complète et sécurisée d'une communication chiffrée end-to-end pour une application RH. Les principaux atouts sont :
-
-✅ **Authentification forte** (MFA)  
-✅ **Cryptographie moderne** (DH + AES-256)  
-✅ **Architecture Zero-Knowledge**  
-✅ **Séparation des rôles**  
-✅ **Code open-source et documenté**
-
-**Recommandations Production** :
-- Passer à DH 2048+ bits
-- Ajouter HTTPS obligatoire
-- Implémenter rate limiting
-- Logs de sécurité centralisés
-- Rotation des secrets JWT
-
----
-
-**Auteur** : Système HR Sécurisé  
-**Date** : Décembre 2025  
-**Version** : 1.0.0
