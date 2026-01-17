@@ -52,7 +52,7 @@ const LeaveRequestForm = () => {
 
     try {
       await createLeaveRequest(formData);
-      setSuccess('Demande créée avec succès!');
+      setSuccess('✅ Demande créée! En attente d\'autorisation de l\'Admin pour établir la communication sécurisée avec le RH.');
       setFormData({
         type: 'absence',
         start_date: '',

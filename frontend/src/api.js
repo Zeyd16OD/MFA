@@ -74,4 +74,18 @@ export const createUser = (userData) =>
 export const getAllMessages = () => 
   api.get('/admin/messages');
 
+// Communication Authorization endpoints (Admin)
+export const getPendingCommunicationAuths = () =>
+  api.get('/communication-auth/pending');
+
+export const getAllCommunicationAuths = () =>
+  api.get('/communication-auth/all');
+
+export const updateCommunicationAuth = (authId, action) =>
+  api.put(`/communication-auth/${authId}`, { action });
+
+// Communication Authorization endpoints (Employee)
+export const getMyCommunicationAuths = () =>
+  api.get('/communication-auth/my-requests');
+
 export default api;

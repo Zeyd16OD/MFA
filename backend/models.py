@@ -114,3 +114,23 @@ class OTPInDB(BaseModel):
     email: str
     code: str
     expiration: str
+
+
+# Communication Authorization Models (Admin approves before key exchange)
+class CommunicationAuthRequest(BaseModel):
+    leave_request_id: int
+
+
+class CommunicationAuthResponse(BaseModel):
+    id: int
+    leave_request_id: int
+    employee_id: int
+    employee_email: str
+    status: str  # pending_admin, approved, rejected, key_exchanged, message_sent
+    created_at: str
+    approved_at: Optional[str] = None
+    rejected_at: Optional[str] = None
+
+
+class CommunicationAuthUpdate(BaseModel):
+    action: Literal["approve", "reject"]

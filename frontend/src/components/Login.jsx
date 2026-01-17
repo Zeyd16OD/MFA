@@ -45,9 +45,16 @@ const Login = ({ onLoginSuccess }) => {
       const errorMessage = err.response?.data?.detail || 'OTP verification failed';
       setError(errorMessage);
       
-      // Show resend button if OTP is invalid (not if blocked)
+      // Si l'OTP est invalide (pas bloqué), rediriger vers la page de login
       if (!errorMessage.includes('Trop de tentatives')) {
-        setShowResendButton(true);
+        // Réinitialiser le formulaire et retourner à l'étape 1
+        setTimeout(() => {
+          setStep(1);
+          setOtpCode('');
+          setEmail('');
+          setPassword('');
+          setShowResendButton(false);
+        }, 2000); // Afficher l'erreur pendant 2 secondes avant de rediriger
       }
     } finally {
       setLoading(false);

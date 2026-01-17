@@ -11,7 +11,8 @@ from models import (
     LoginRequest, OTPVerifyRequest, Token, UserCreate, User,
     DHParams, DHExchangeRequest, DHExchangeResponse,
     EncryptedMessage, LeaveRequest, MessageInDB,
-    LeaveRequestCreate, LeaveRequestUpdate, LeaveRequestResponse
+    LeaveRequestCreate, LeaveRequestUpdate, LeaveRequestResponse,
+    CommunicationAuthResponse, CommunicationAuthUpdate
 )
 from typing import List
 from security import (
@@ -19,7 +20,7 @@ from security import (
     decode_access_token, generate_otp,
     generate_dh_parameters, generate_dh_private_key,
     calculate_dh_public_key, calculate_dh_shared_secret,
-    derive_aes_key_from_secret, aes_decrypt
+    derive_aes_key_from_secret, aes_decrypt, aes_encrypt
 )
 from database import db
 
@@ -219,9 +220,11 @@ async def verify_otp(request: OTPVerifyRequest):
     # Verify OTP
     if not db.verify_otp(request.email, request.otp_code):
         db.record_otp_attempt(request.email, False)
+        # Invalider l'OTP existant pour forcer l'utilisateur à recommencer
+        db.cancel_otp(request.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Code OTP invalide ou expiré"
+            detail="Code OTP invalide. Veuillez vous reconnecter."
         )
     
     # Success - reset OTP attempts
@@ -596,6 +599,7 @@ async def create_leave_request(
     """
     Employee creates a new leave/absence request.
     Only employees can create requests.
+    This also creates a communication authorization request for admin approval.
     """
     if current_user['role'] != "employee":
         raise HTTPException(
@@ -603,7 +607,7 @@ async def create_leave_request(
             detail="Seuls les employés peuvent créer des demandes"
         )
     
-    # Create the request
+    # Create the leave request
     request_id = db.create_leave_request(
         employee_id=current_user.doc_id,
         employee_email=current_user['email'],
@@ -614,9 +618,18 @@ async def create_leave_request(
         days_count=request_data.days_count
     )
     
+    # Create a communication authorization request for admin approval
+    auth_id = db.create_communication_auth(
+        leave_request_id=request_id,
+        employee_id=current_user.doc_id,
+        employee_email=current_user['email']
+    )
+    
     return {
-        "message": "Demande créée avec succès",
-        "request_id": request_id
+        "message": "Demande créée avec succès. En attente d'autorisation de l'admin pour l'envoi sécurisé.",
+        "request_id": request_id,
+        "auth_id": auth_id,
+        "status": "pending_admin"
     }
 
 
@@ -671,6 +684,13 @@ async def get_all_leave_requests(current_user: dict = Depends(get_current_user))
     
     result = []
     for req in requests:
+        # Vérifier si cette demande a été autorisée par l'admin
+        # Ne pas afficher les demandes dont l'autorisation a été refusée
+        comm_auth = db.get_communication_auth_by_leave_request(req.doc_id)
+        if comm_auth and comm_auth['status'] == 'rejected':
+            # Demande refusée par l'admin, ne pas l'afficher au RH
+            continue
+        
         result.append(LeaveRequestResponse(
             id=req.doc_id,
             employee_id=req['employee_id'],
@@ -761,6 +781,211 @@ async def delete_leave_request(
     db.delete_leave_request(request_id)
     
     return {"message": "Demande supprimée avec succès"}
+
+
+# ==================== COMMUNICATION AUTHORIZATION ENDPOINTS ====================
+
+@app.get("/communication-auth/pending", response_model=List[CommunicationAuthResponse])
+async def get_pending_communication_auths(current_user: dict = Depends(get_current_user)):
+    """
+    Admin gets all pending communication authorization requests.
+    """
+    if current_user['role'] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul l'admin peut voir les demandes d'autorisation"
+        )
+    
+    auths = db.get_pending_communication_auths()
+    result = []
+    for auth in auths:
+        result.append(CommunicationAuthResponse(
+            id=auth.doc_id,
+            leave_request_id=auth['leave_request_id'],
+            employee_id=auth['employee_id'],
+            employee_email=auth['employee_email'],
+            status=auth['status'],
+            created_at=auth['created_at'],
+            approved_at=auth.get('approved_at'),
+            rejected_at=auth.get('rejected_at')
+        ))
+    return result
+
+
+@app.get("/communication-auth/all", response_model=List[CommunicationAuthResponse])
+async def get_all_communication_auths(current_user: dict = Depends(get_current_user)):
+    """
+    Admin gets all communication authorization requests.
+    """
+    if current_user['role'] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul l'admin peut voir les demandes d'autorisation"
+        )
+    
+    auths = db.get_all_communication_auths()
+    result = []
+    for auth in auths:
+        result.append(CommunicationAuthResponse(
+            id=auth.doc_id,
+            leave_request_id=auth['leave_request_id'],
+            employee_id=auth['employee_id'],
+            employee_email=auth['employee_email'],
+            status=auth['status'],
+            created_at=auth['created_at'],
+            approved_at=auth.get('approved_at'),
+            rejected_at=auth.get('rejected_at')
+        ))
+    return result
+
+
+@app.put("/communication-auth/{auth_id}")
+async def update_communication_auth(
+    auth_id: int,
+    update_data: CommunicationAuthUpdate,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Admin approves or rejects a communication authorization request.
+    If approved, key exchange is performed and message is sent to HR.
+    """
+    if current_user['role'] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul l'admin peut gérer les autorisations"
+        )
+    
+    # Get the communication auth
+    auth = db.get_communication_auth(auth_id)
+    if not auth:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Autorisation non trouvée"
+        )
+    
+    if auth['status'] != 'pending_admin':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cette demande a déjà été traitée"
+        )
+    
+    if update_data.action == "reject":
+        # Reject the authorization
+        db.update_communication_auth_status(auth_id, 'rejected')
+        
+        # Also update the leave request status - commentaire pour l'employé
+        db.update_leave_request_status(
+            auth['leave_request_id'], 
+            'rejected', 
+            "Demande d'envoi de requête non autorisée par l'admin"
+        )
+        
+        return {"message": "Autorisation de communication refusée"}
+    
+    elif update_data.action == "approve":
+        # Update status to approved
+        db.update_communication_auth_status(auth_id, 'approved')
+        
+        # Get the leave request data
+        leave_request = db.get_leave_request(auth['leave_request_id'])
+        if not leave_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Demande de congé non trouvée"
+            )
+        
+        # Get DH params
+        params = db.get_dh_params()
+        if not params:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="DH parameters not available"
+            )
+        
+        p = int(params['p'], 16)
+        g = int(params['g'], 16)
+        
+        # Generate server-side keys for this communication
+        server_private_key = generate_dh_private_key(p)
+        server_public_key = calculate_dh_public_key(g, server_private_key, p)
+        
+        # Store session with private key
+        db.store_session(auth['employee_id'], hex(server_private_key))
+        
+        # For now, we simulate the key exchange and encrypt the message
+        # In a real scenario, we would use the client's public key
+        # Here we use a simplified approach where the server handles the encryption
+        
+        # Create a shared secret (simplified - server creates and stores both keys)
+        shared_secret = calculate_dh_shared_secret(server_public_key, server_private_key, p)
+        aes_key = derive_aes_key_from_secret(shared_secret)
+        
+        # Update session with shared secret
+        db.update_session_secret(auth['employee_id'], hex(shared_secret))
+        
+        # Prepare the leave request content
+        leave_content = json.dumps({
+            "employee_name": leave_request['employee_email'],
+            "start_date": leave_request['start_date'],
+            "end_date": leave_request['end_date'],
+            "days": leave_request['days_count'],
+            "reason": leave_request['reason'],
+            "type": leave_request['type']
+        })
+        
+        # Encrypt the content using aes_encrypt from security.py
+        encrypted_content, iv = aes_encrypt(leave_content, aes_key)
+        
+        # Get HR manager
+        hr_users = db.get_users_by_role("hr_manager")
+        if not hr_users:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No HR manager found"
+            )
+        hr_manager = hr_users[0]
+        
+        # Store the encrypted message
+        msg_id = db.store_message(
+            from_id=auth['employee_id'],
+            to_id=hr_manager.doc_id,
+            encrypted_content=encrypted_content,
+            iv=iv
+        )
+        
+        # Update authorization status
+        db.update_communication_auth_status(auth_id, 'message_sent')
+        
+        return {
+            "message": "Communication autorisée. Clés générées et message chiffré envoyé au RH.",
+            "status": "message_sent"
+        }
+
+
+@app.get("/communication-auth/my-requests")
+async def get_my_communication_auths(current_user: dict = Depends(get_current_user)):
+    """
+    Employee gets their own communication authorization status.
+    """
+    if current_user['role'] != "employee":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès refusé"
+        )
+    
+    auths = db.get_communication_auth_by_employee(current_user.doc_id)
+    result = []
+    for auth in auths:
+        result.append({
+            "id": auth.doc_id,
+            "leave_request_id": auth['leave_request_id'],
+            "status": auth['status'],
+            "created_at": auth['created_at'],
+            "approved_at": auth.get('approved_at'),
+            "rejected_at": auth.get('rejected_at')
+        })
+    return result
 
 
 # ==================== ADMIN ENDPOINTS ====================

@@ -20,6 +20,7 @@ class Database:
         self.login_attempts = self.db.table('login_attempts')  # Track login attempts
         self.otp_attempts = self.db.table('otp_attempts')  # Track OTP attempts
         self.leave_requests = self.db.table('leave_requests')  # Leave/Absence requests
+        self.communication_auth = self.db.table('communication_auth')  # Communication authorization requests
     
     # User Operations
     def create_user(self, email: str, password_hash: str, role: str, public_key_cert: str = None) -> int:
@@ -316,6 +317,53 @@ class Database:
     def delete_leave_request(self, request_id: int):
         """Delete a leave request (employee can delete their own pending requests)."""
         self.leave_requests.remove(doc_ids=[request_id])
+    
+    # Communication Authorization Operations
+    def create_communication_auth(self, leave_request_id: int, employee_id: int, employee_email: str) -> int:
+        """Create a new communication authorization request for admin approval."""
+        auth_id = self.communication_auth.insert({
+            'leave_request_id': leave_request_id,
+            'employee_id': employee_id,
+            'employee_email': employee_email,
+            'status': 'pending_admin',  # pending_admin, approved, rejected, key_exchanged, message_sent
+            'created_at': datetime.utcnow().isoformat(),
+            'approved_at': None,
+            'rejected_at': None
+        })
+        return auth_id
+    
+    def get_communication_auth(self, auth_id: int) -> Optional[dict]:
+        """Get a specific communication authorization by ID."""
+        return self.communication_auth.get(doc_id=auth_id)
+    
+    def get_communication_auth_by_leave_request(self, leave_request_id: int) -> Optional[dict]:
+        """Get communication authorization by leave request ID."""
+        Auth = Query()
+        result = self.communication_auth.search(Auth.leave_request_id == leave_request_id)
+        return result[0] if result else None
+    
+    def get_pending_communication_auths(self) -> List[dict]:
+        """Get all pending communication authorizations (for Admin)."""
+        Auth = Query()
+        return self.communication_auth.search(Auth.status == 'pending_admin')
+    
+    def get_all_communication_auths(self) -> List[dict]:
+        """Get all communication authorizations (for Admin)."""
+        return self.communication_auth.all()
+    
+    def update_communication_auth_status(self, auth_id: int, status: str):
+        """Update communication authorization status."""
+        update_data = {'status': status}
+        if status == 'approved':
+            update_data['approved_at'] = datetime.utcnow().isoformat()
+        elif status == 'rejected':
+            update_data['rejected_at'] = datetime.utcnow().isoformat()
+        self.communication_auth.update(update_data, doc_ids=[auth_id])
+    
+    def get_communication_auth_by_employee(self, employee_id: int) -> List[dict]:
+        """Get all communication authorizations for an employee."""
+        Auth = Query()
+        return self.communication_auth.search(Auth.employee_id == employee_id)
     
     def close(self):
         """Close database connection."""
