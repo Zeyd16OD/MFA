@@ -21,6 +21,10 @@ class Database:
         self.otp_attempts = self.db.table('otp_attempts')  # Track OTP attempts
         self.leave_requests = self.db.table('leave_requests')  # Leave/Absence requests
         self.communication_auth = self.db.table('communication_auth')  # Communication authorization requests
+        # DAC (Discretionary Access Control) tables
+        self.dac_documents = self.db.table('dac_documents')  # Documents with DAC
+        self.dac_permissions = self.db.table('dac_permissions')  # ACL permissions
+        self.dac_audit_log = self.db.table('dac_audit_log')  # Audit trail for DAC
     
     # User Operations
     def create_user(self, email: str, password_hash: str, role: str, public_key_cert: str = None) -> int:
@@ -364,6 +368,174 @@ class Database:
         """Get all communication authorizations for an employee."""
         Auth = Query()
         return self.communication_auth.search(Auth.employee_id == employee_id)
+    
+    # ==================== DAC Document Operations ====================
+    
+    def create_dac_document(self, owner_id: int, owner_email: str, title: str, 
+                           content: str, is_confidential: bool = False) -> int:
+        """Create a new document with the creator as owner (DAC: owner has full control)."""
+        doc_id = self.dac_documents.insert({
+            'owner_id': owner_id,
+            'owner_email': owner_email,
+            'title': title,
+            'content': content,
+            'is_confidential': is_confidential,
+            'created_at': datetime.utcnow().isoformat(),
+            'updated_at': None
+        })
+        
+        # Owner automatically gets all permissions
+        self.dac_permissions.insert({
+            'document_id': doc_id,
+            'user_id': owner_id,
+            'read': True,
+            'write': True,
+            'delete': True,
+            'share': True,  # DAC weakness: owner can share freely
+            'granted_by': owner_id,
+            'granted_at': datetime.utcnow().isoformat()
+        })
+        
+        return doc_id
+    
+    def get_dac_document(self, doc_id: int) -> Optional[dict]:
+        """Get a document by ID."""
+        return self.dac_documents.get(doc_id=doc_id)
+    
+    def get_user_dac_documents(self, user_id: int) -> List[dict]:
+        """Get all documents a user has access to (owned or shared)."""
+        # Get documents owned by user
+        Doc = Query()
+        owned = self.dac_documents.search(Doc.owner_id == user_id)
+        
+        # Get documents shared with user
+        Perm = Query()
+        shared_perms = self.dac_permissions.search(
+            (Perm.user_id == user_id) & (Perm.read == True)
+        )
+        
+        shared_doc_ids = [p['document_id'] for p in shared_perms]
+        shared = [self.dac_documents.get(doc_id=did) for did in shared_doc_ids if did]
+        shared = [d for d in shared if d and d.get('owner_id') != user_id]
+        
+        return owned + shared
+    
+    def update_dac_document(self, doc_id: int, title: str = None, content: str = None):
+        """Update a document's content."""
+        update_data = {'updated_at': datetime.utcnow().isoformat()}
+        if title:
+            update_data['title'] = title
+        if content:
+            update_data['content'] = content
+        self.dac_documents.update(update_data, doc_ids=[doc_id])
+    
+    def delete_dac_document(self, doc_id: int):
+        """Delete a document and its permissions."""
+        self.dac_documents.remove(doc_ids=[doc_id])
+        Perm = Query()
+        self.dac_permissions.remove(Perm.document_id == doc_id)
+    
+    def copy_dac_document(self, original_doc_id: int, new_owner_id: int, 
+                         new_owner_email: str, new_title: str) -> int:
+        """
+        Copy a document to a new owner - DAC WEAKNESS DEMONSTRATION.
+        The new owner gets full control, original restrictions don't apply!
+        """
+        original = self.dac_documents.get(doc_id=original_doc_id)
+        if not original:
+            return None
+        
+        # Create a copy WITHOUT the original's confidential flag or restrictions
+        new_doc_id = self.create_dac_document(
+            owner_id=new_owner_id,
+            owner_email=new_owner_email,
+            title=new_title,
+            content=original['content'],  # Data is copied!
+            is_confidential=False  # Original confidentiality is LOST - DAC weakness!
+        )
+        
+        return new_doc_id
+    
+    # ==================== DAC Permission Operations ====================
+    
+    def get_user_permissions(self, doc_id: int, user_id: int) -> Optional[dict]:
+        """Get a user's permissions for a document."""
+        Perm = Query()
+        result = self.dac_permissions.search(
+            (Perm.document_id == doc_id) & (Perm.user_id == user_id)
+        )
+        return result[0] if result else None
+    
+    def grant_dac_permission(self, doc_id: int, target_user_id: int, 
+                            granted_by: int, read: bool = False, write: bool = False,
+                            delete: bool = False, share: bool = False) -> int:
+        """
+        Grant permissions to a user - DAC WEAKNESS: anyone with 'share' can grant permissions.
+        """
+        Perm = Query()
+        # Remove existing permission if any
+        self.dac_permissions.remove(
+            (Perm.document_id == doc_id) & (Perm.user_id == target_user_id)
+        )
+        
+        perm_id = self.dac_permissions.insert({
+            'document_id': doc_id,
+            'user_id': target_user_id,
+            'read': read,
+            'write': write,
+            'delete': delete,
+            'share': share,  # Can re-share - DAC weakness: permission propagation!
+            'granted_by': granted_by,
+            'granted_at': datetime.utcnow().isoformat()
+        })
+        return perm_id
+    
+    def revoke_dac_permission(self, doc_id: int, user_id: int):
+        """Revoke a user's permissions for a document."""
+        Perm = Query()
+        self.dac_permissions.remove(
+            (Perm.document_id == doc_id) & (Perm.user_id == user_id)
+        )
+    
+    def get_document_permissions(self, doc_id: int) -> List[dict]:
+        """Get all permissions for a document (ACL)."""
+        Perm = Query()
+        return self.dac_permissions.search(Perm.document_id == doc_id)
+    
+    # ==================== DAC Audit Log Operations ====================
+    
+    def log_dac_action(self, action: str, document_id: int, document_title: str,
+                      actor_id: int, actor_email: str, details: str,
+                      target_user_id: int = None, target_user_email: str = None,
+                      security_warning: str = None) -> int:
+        """Log a DAC action for audit trail."""
+        log_id = self.dac_audit_log.insert({
+            'action': action,
+            'document_id': document_id,
+            'document_title': document_title,
+            'actor_id': actor_id,
+            'actor_email': actor_email,
+            'target_user_id': target_user_id,
+            'target_user_email': target_user_email,
+            'details': details,
+            'timestamp': datetime.utcnow().isoformat(),
+            'security_warning': security_warning
+        })
+        return log_id
+    
+    def get_dac_audit_logs(self, limit: int = 100) -> List[dict]:
+        """Get recent DAC audit logs."""
+        logs = self.dac_audit_log.all()
+        # Sort by timestamp descending
+        logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        return logs[:limit]
+    
+    def get_document_audit_logs(self, doc_id: int) -> List[dict]:
+        """Get audit logs for a specific document."""
+        Log = Query()
+        logs = self.dac_audit_log.search(Log.document_id == doc_id)
+        logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        return logs
     
     def close(self):
         """Close database connection."""

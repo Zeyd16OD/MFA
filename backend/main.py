@@ -12,7 +12,9 @@ from models import (
     DHParams, DHExchangeRequest, DHExchangeResponse,
     EncryptedMessage, LeaveRequest, MessageInDB,
     LeaveRequestCreate, LeaveRequestUpdate, LeaveRequestResponse,
-    CommunicationAuthResponse, CommunicationAuthUpdate
+    CommunicationAuthResponse, CommunicationAuthUpdate,
+    DACDocumentCreate, DACDocumentUpdate, DACShareRequest, 
+    DACDocumentResponse, DACDocumentCopy, DACPermission, DACAuditLog
 )
 from typing import List
 from security import (
@@ -1055,6 +1057,430 @@ async def get_all_messages_admin(current_user: dict = Depends(get_current_user))
         })
     
     return result
+
+
+# ==================== DAC (Discretionary Access Control) ENDPOINTS ====================
+# These endpoints demonstrate DAC weaknesses for educational purposes
+
+@app.post("/dac/documents")
+async def create_dac_document(doc_data: DACDocumentCreate, current_user: dict = Depends(get_current_user)):
+    """
+    Create a new document. The creator becomes the owner with full permissions.
+    DAC Principle: Owner has complete discretionary control.
+    NOTE: Employees cannot create documents - only Admin and HR Manager can.
+    """
+    # Employees cannot create documents
+    if current_user['role'] == 'employee':
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Les employés ne peuvent pas créer de documents. Seuls les Admin et HR peuvent le faire."
+        )
+    
+    doc_id = db.create_dac_document(
+        owner_id=current_user.doc_id,
+        owner_email=current_user['email'],
+        title=doc_data.title,
+        content=doc_data.content,
+        is_confidential=doc_data.is_confidential
+    )
+    
+    # Log the action
+    db.log_dac_action(
+        action="created",
+        document_id=doc_id,
+        document_title=doc_data.title,
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        details=f"Document created. Confidential: {doc_data.is_confidential}"
+    )
+    
+    return {"message": "Document created successfully", "document_id": doc_id}
+
+
+@app.get("/dac/documents")
+async def get_my_documents(current_user: dict = Depends(get_current_user)):
+    """
+    Get all documents the user has access to (owned or shared with them).
+    """
+    documents = db.get_user_dac_documents(current_user.doc_id)
+    
+    result = []
+    for doc in documents:
+        if doc is None:
+            continue
+        permissions = db.get_user_permissions(doc.doc_id, current_user.doc_id)
+        shared_with = []
+        
+        # If owner, show who it's shared with
+        if doc.get('owner_id') == current_user.doc_id:
+            all_perms = db.get_document_permissions(doc.doc_id)
+            for perm in all_perms:
+                if perm['user_id'] != current_user.doc_id:
+                    user = db.get_user_by_id(perm['user_id'])
+                    if user:
+                        shared_with.append({
+                            'user_id': perm['user_id'],
+                            'email': user['email'],
+                            'permissions': {
+                                'read': perm.get('read', False),
+                                'write': perm.get('write', False),
+                                'delete': perm.get('delete', False),
+                                'share': perm.get('share', False)
+                            }
+                        })
+        
+        result.append({
+            'id': doc.doc_id,
+            'title': doc.get('title', ''),
+            'content': doc.get('content', ''),
+            'owner_id': doc.get('owner_id'),
+            'owner_email': doc.get('owner_email', ''),
+            'is_confidential': doc.get('is_confidential', False),
+            'created_at': doc.get('created_at', ''),
+            'updated_at': doc.get('updated_at'),
+            'my_permissions': {
+                'read': permissions.get('read', False) if permissions else True,
+                'write': permissions.get('write', False) if permissions else True,
+                'delete': permissions.get('delete', False) if permissions else True,
+                'share': permissions.get('share', False) if permissions else True
+            },
+            'shared_with': shared_with,
+            'is_owner': doc.get('owner_id') == current_user.doc_id
+        })
+    
+    return result
+
+
+@app.get("/dac/documents/{doc_id}")
+async def get_document(doc_id: int, current_user: dict = Depends(get_current_user)):
+    """
+    Get a specific document if user has read permission.
+    """
+    doc = db.get_dac_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    permissions = db.get_user_permissions(doc_id, current_user.doc_id)
+    
+    # Check read access
+    if not permissions or not permissions.get('read', False):
+        raise HTTPException(status_code=403, detail="You don't have read access to this document")
+    
+    # Log access
+    db.log_dac_action(
+        action="accessed",
+        document_id=doc_id,
+        document_title=doc.get('title', ''),
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        details="Document read access"
+    )
+    
+    return {
+        'id': doc.doc_id,
+        'title': doc.get('title', ''),
+        'content': doc.get('content', ''),
+        'owner_id': doc.get('owner_id'),
+        'owner_email': doc.get('owner_email', ''),
+        'is_confidential': doc.get('is_confidential', False),
+        'created_at': doc.get('created_at', ''),
+        'my_permissions': {
+            'read': permissions.get('read', False),
+            'write': permissions.get('write', False),
+            'delete': permissions.get('delete', False),
+            'share': permissions.get('share', False)
+        }
+    }
+
+
+@app.put("/dac/documents/{doc_id}")
+async def update_document(doc_id: int, doc_update: DACDocumentUpdate, 
+                         current_user: dict = Depends(get_current_user)):
+    """
+    Update a document if user has write permission.
+    """
+    doc = db.get_dac_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    permissions = db.get_user_permissions(doc_id, current_user.doc_id)
+    
+    if not permissions or not permissions.get('write', False):
+        raise HTTPException(status_code=403, detail="You don't have write access to this document")
+    
+    db.update_dac_document(doc_id, doc_update.title, doc_update.content)
+    
+    db.log_dac_action(
+        action="modified",
+        document_id=doc_id,
+        document_title=doc.get('title', ''),
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        details="Document content updated"
+    )
+    
+    return {"message": "Document updated successfully"}
+
+
+@app.delete("/dac/documents/{doc_id}")
+async def delete_document(doc_id: int, current_user: dict = Depends(get_current_user)):
+    """
+    Delete a document if user has delete permission.
+    """
+    doc = db.get_dac_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    permissions = db.get_user_permissions(doc_id, current_user.doc_id)
+    
+    if not permissions or not permissions.get('delete', False):
+        raise HTTPException(status_code=403, detail="You don't have delete access to this document")
+    
+    title = doc.get('title', '')
+    db.delete_dac_document(doc_id)
+    
+    db.log_dac_action(
+        action="deleted",
+        document_id=doc_id,
+        document_title=title,
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        details="Document deleted permanently"
+    )
+    
+    return {"message": "Document deleted successfully"}
+
+
+@app.post("/dac/documents/{doc_id}/share")
+async def share_document(doc_id: int, share_request: DACShareRequest, 
+                        current_user: dict = Depends(get_current_user)):
+    """
+    Share a document with another user.
+    DAC WEAKNESS: Anyone with 'share' permission can grant permissions to others,
+    leading to uncontrolled propagation of access rights!
+    """
+    doc = db.get_dac_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    permissions = db.get_user_permissions(doc_id, current_user.doc_id)
+    
+    if not permissions or not permissions.get('share', False):
+        raise HTTPException(status_code=403, detail="You don't have share permission for this document")
+    
+    # Check target user exists
+    target_user = db.get_user_by_id(share_request.target_user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+    
+    # DAC Rule: If HR shares with an employee, only READ permission is allowed
+    final_read = share_request.permissions.read
+    final_write = share_request.permissions.write
+    final_delete = share_request.permissions.delete
+    final_share = share_request.permissions.share
+    
+    if current_user['role'] == 'hr_manager' and target_user['role'] == 'employee':
+        # HR can only give read access to employees
+        final_read = True
+        final_write = False
+        final_delete = False
+        final_share = False
+    
+    # DAC WEAKNESS: No central control! Anyone with share permission can grant ANY permission
+    # (except HR->Employee which is restricted to read-only)
+    db.grant_dac_permission(
+        doc_id=doc_id,
+        target_user_id=share_request.target_user_id,
+        granted_by=current_user.doc_id,
+        read=final_read,
+        write=final_write,
+        delete=final_delete,
+        share=final_share
+    )
+    
+    # Determine security warning
+    security_warning = None
+    if share_request.permissions.share:
+        security_warning = "⚠️ DAC WEAKNESS: Share permission granted - this user can now share with others, causing uncontrolled propagation!"
+    if doc.get('is_confidential'):
+        security_warning = "⚠️ DAC WEAKNESS: Confidential document shared - DAC cannot prevent this!"
+    
+    db.log_dac_action(
+        action="shared",
+        document_id=doc_id,
+        document_title=doc.get('title', ''),
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        target_user_id=share_request.target_user_id,
+        target_user_email=target_user['email'],
+        details=f"Permissions granted: read={share_request.permissions.read}, write={share_request.permissions.write}, delete={share_request.permissions.delete}, share={share_request.permissions.share}",
+        security_warning=security_warning
+    )
+    
+    return {
+        "message": f"Document shared with {target_user['email']}",
+        "security_warning": security_warning
+    }
+
+
+@app.post("/dac/documents/{doc_id}/copy")
+async def copy_document(doc_id: int, copy_request: DACDocumentCopy,
+                       current_user: dict = Depends(get_current_user)):
+    """
+    Copy a document's content to a new document owned by the current user.
+    
+    DAC WEAKNESS DEMONSTRATION:
+    - Original document restrictions are LOST
+    - New owner has FULL control over the copied data
+    - Confidential flag is removed
+    - This is how data leaks happen in DAC systems!
+    """
+    original_doc = db.get_dac_document(doc_id)
+    if not original_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    permissions = db.get_user_permissions(doc_id, current_user.doc_id)
+    
+    if not permissions or not permissions.get('read', False):
+        raise HTTPException(status_code=403, detail="You don't have read access to copy this document")
+    
+    # Copy the document - original restrictions are lost!
+    new_doc_id = db.copy_dac_document(
+        original_doc_id=doc_id,
+        new_owner_id=current_user.doc_id,
+        new_owner_email=current_user['email'],
+        new_title=copy_request.new_title
+    )
+    
+    # Log with security warning
+    security_warning = "⚠️ DAC CRITICAL WEAKNESS: Data copied without original restrictions! "
+    if original_doc.get('is_confidential'):
+        security_warning += "CONFIDENTIAL data has been duplicated and the new copy is NOT marked as confidential!"
+    
+    db.log_dac_action(
+        action="copied",
+        document_id=doc_id,
+        document_title=original_doc.get('title', ''),
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        details=f"Document copied to new document (ID: {new_doc_id}, Title: {copy_request.new_title})",
+        security_warning=security_warning
+    )
+    
+    # Also log for the new document
+    db.log_dac_action(
+        action="created",
+        document_id=new_doc_id,
+        document_title=copy_request.new_title,
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        details=f"Created as copy of document ID: {doc_id} ('{original_doc.get('title', '')}')",
+        security_warning="This document was created by copying another document. Original access controls do not apply."
+    )
+    
+    return {
+        "message": "Document copied successfully",
+        "new_document_id": new_doc_id,
+        "security_warning": security_warning
+    }
+
+
+@app.delete("/dac/documents/{doc_id}/share/{user_id}")
+async def revoke_share(doc_id: int, user_id: int, current_user: dict = Depends(get_current_user)):
+    """
+    Revoke a user's access to a document.
+    Only document owner can revoke permissions.
+    """
+    doc = db.get_dac_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if doc.get('owner_id') != current_user.doc_id:
+        raise HTTPException(status_code=403, detail="Only the document owner can revoke permissions")
+    
+    target_user = db.get_user_by_id(user_id)
+    db.revoke_dac_permission(doc_id, user_id)
+    
+    db.log_dac_action(
+        action="revoked",
+        document_id=doc_id,
+        document_title=doc.get('title', ''),
+        actor_id=current_user.doc_id,
+        actor_email=current_user['email'],
+        target_user_id=user_id,
+        target_user_email=target_user['email'] if target_user else 'Unknown',
+        details="Access revoked",
+        security_warning="⚠️ Note: If this user copied the document, they still have access to the copy!"
+    )
+    
+    return {"message": "Access revoked successfully"}
+
+
+@app.get("/dac/users")
+async def get_users_for_sharing(current_user: dict = Depends(get_current_user)):
+    """
+    Get list of users that documents can be shared with.
+    """
+    all_users = db.users.all()
+    return [
+        {
+            'id': user.doc_id,
+            'email': user['email'],
+            'role': user['role']
+        }
+        for user in all_users if user.doc_id != current_user.doc_id
+    ]
+
+
+@app.get("/dac/audit-logs")
+async def get_audit_logs(current_user: dict = Depends(get_current_user)):
+    """
+    Get DAC audit logs. Admin sees all, others see only their actions.
+    This demonstrates the security issues in DAC through the audit trail.
+    """
+    logs = db.get_dac_audit_logs(limit=200)
+    
+    if current_user['role'] == 'admin':
+        # Admin sees all logs
+        return [
+            {
+                'id': log.doc_id,
+                'action': log.get('action'),
+                'document_id': log.get('document_id'),
+                'document_title': log.get('document_title'),
+                'actor_id': log.get('actor_id'),
+                'actor_email': log.get('actor_email'),
+                'target_user_id': log.get('target_user_id'),
+                'target_user_email': log.get('target_user_email'),
+                'details': log.get('details'),
+                'timestamp': log.get('timestamp'),
+                'security_warning': log.get('security_warning')
+            }
+            for log in logs
+        ]
+    else:
+        # Others see only logs involving them
+        filtered = [
+            log for log in logs 
+            if log.get('actor_id') == current_user.doc_id or 
+               log.get('target_user_id') == current_user.doc_id
+        ]
+        return [
+            {
+                'id': log.doc_id,
+                'action': log.get('action'),
+                'document_id': log.get('document_id'),
+                'document_title': log.get('document_title'),
+                'actor_id': log.get('actor_id'),
+                'actor_email': log.get('actor_email'),
+                'target_user_id': log.get('target_user_id'),
+                'target_user_email': log.get('target_user_email'),
+                'details': log.get('details'),
+                'timestamp': log.get('timestamp'),
+                'security_warning': log.get('security_warning')
+            }
+            for log in filtered
+        ]
 
 
 # ==================== HEALTH CHECK ====================

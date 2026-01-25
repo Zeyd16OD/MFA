@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { createUser, getAllMessages, getPendingCommunicationAuths, getAllCommunicationAuths, updateCommunicationAuth } from '../api';
+import DACModule from './DACModule';
 
 const AdminDashboard = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState('authorizations'); // 'authorizations', 'users', 'messages'
+  const [activeTab, setActiveTab] = useState('authorizations'); // 'authorizations', 'users', 'messages', 'dac'
   const [messages, setMessages] = useState([]);
   const [pendingAuths, setPendingAuths] = useState([]);
   const [allAuths, setAllAuths] = useState([]);
@@ -141,6 +142,16 @@ const AdminDashboard = ({ user, onLogout }) => {
             }`}
           >
             📨 Messages ({messages.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('dac')}
+            className={`px-6 py-3 rounded-lg font-medium`}
+            style={{
+              backgroundColor: activeTab === 'dac' ? 'var(--md-sys-color-error)' : 'var(--md-sys-color-surface-variant)',
+              color: activeTab === 'dac' ? 'var(--md-sys-color-on-error)' : 'var(--md-sys-color-on-surface-variant)'
+            }}
+          >
+            🔓 Module DAC
           </button>
         </div>
 
@@ -462,6 +473,11 @@ const AdminDashboard = ({ user, onLogout }) => {
               </div>
             )}
           </div>
+        )}
+
+        {/* DAC Module Tab */}
+        {activeTab === 'dac' && (
+          <DACModule user={user} />
         )}
       </div>
     </div>

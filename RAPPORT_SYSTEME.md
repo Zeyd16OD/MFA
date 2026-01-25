@@ -7,40 +7,41 @@ Le système est basé sur une architecture client-serveur avec les acteurs et fo
 ```
                     ACTEURS
 ┌─────────────────────────────────────────────────────┐
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
-│  │     Admin    │  │  RH Manager  │  │  Employé │ │
-│  └──────────────┘  └──────────────┘  └──────────┘ │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  │
+│  │     Admin    │  │  RH Manager  │  │  Employé │  │
+│  └──────────────┘  └──────────────┘  └──────────┘  │
 └─────────────────────────────────────────────────────┘
            │                 │                │
            │                 │                │
            └─────────────────┴────────────────┘
                             │
                             ▼
-            ┌───────────────────────────┐
-            │   AUTHENTIFICATION MFA    │
-            │   - Login + Mot de passe  │
-            │   - Code OTP par email    │
-            │   - Protection brute force│
-            └───────────────────────────┘
+            ┌───────────────────────────────┐
+            │   AUTHENTIFICATION MFA        │
+            │   - Login + Mot de passe      │
+            │   - Code OTP par email        │
+            │   - Protection brute force    │
+            └───────────────────────────────┘
                             │
                             ▼
         ┌───────────────────────────────────┐
         │      APPLICATION PRINCIPALE       │
         │    (Frontend React + Backend)     │
         └───────────────────────────────────┘
-                │               │
-      ┌─────────┴─────────┐     └──────────────┐
-      │                   │                    │
-      ▼                   ▼                    ▼
-┌─────────────┐   ┌──────────────┐   ┌────────────────┐
-│  Messages   │   │  Gestion des │   │  Échange de    │
-│  Chiffrés   │   │   Congés     │   │  Clés DH       │
-│  AES-256    │   │   (RBAC)     │   │  (Crypto)      │
-└─────────────┘   └──────────────┘   └────────────────┘
-      │                   │                    │
-      └───────────────────┴────────────────────┘
-                          │
-                          ▼
+          │           │           │           │
+    ┌─────┘           │           │           └─────┐
+    │                 │           │                 │
+    ▼                 ▼           ▼                 ▼
+┌─────────┐   ┌────────────┐   ┌─────────┐   ┌───────────────┐
+│ Gestion │   │ Communi-   │   │ Autori- │   │  Module DAC   │
+│ Congés  │   │ cation     │   │ sations │   │  (Démonstra-  │
+│ (RBAC)  │   │ Sécurisée  │   │ Admin   │   │  tion faib-   │
+│         │   │ (DH+AES)   │   │         │   │  lesses)      │
+└─────────┘   └────────────┘   └─────────┘   └───────────────┘
+      │              │              │               │
+      └──────────────┴──────────────┴───────────────┘
+                            │
+                            ▼
               ┌───────────────────────┐
               │  Base de données      │
               │  TinyDB (JSON)        │
@@ -53,7 +54,7 @@ Le système est basé sur une architecture client-serveur avec les acteurs et fo
 ```
 
 **Technologies utilisées :**
-- **Frontend** : React 18, Vite, Tailwind CSS
+- **Frontend** : React 18, Vite, Tailwind CSS, Material Design 3
 - **Backend** : FastAPI (Python), TinyDB
 - **Sécurité** : JWT, Bcrypt, AES-256, Diffie-Hellman 1536-bit
 - **Email** : FastAPI-Mail + Gmail SMTP
@@ -62,23 +63,28 @@ Le système est basé sur une architecture client-serveur avec les acteurs et fo
 
 ## 2. Les Acteurs du Système
 
-### 👤 Administrateur
-- Gère les comptes utilisateurs
-- Visualise tous les messages du système
-- Accès complet aux fonctionnalités d'administration
-- **Pas d'accès** au système de gestion des congés
+### 👤 Administrateur (Admin)
+- Gère les comptes utilisateurs (création)
+- Visualise tous les messages chiffrés du système
+- **Autorise les communications** entre employés et RH (rôle de TTP)
+- Accès au **Module DAC** pour démonstration des faiblesses
+- Consulte les logs d'audit DAC complets
 
 ### 👔 Responsable RH (HR Manager)
-- Visualise et déchiffre les demandes d'absence reçues
-- Approuve ou rejette les demandes de congés
-- Gère les demandes de tous les employés
-- Peut ajouter des commentaires aux décisions
+- Visualise toutes les demandes d'absence/congés
+- Approuve ou rejette les demandes avec commentaires
+- Reçoit les demandes via canal sécurisé (après autorisation admin)
+- Accès au **Module DAC** pour partage de documents
+- Peut créer et gérer des documents
 
-### 👨‍💼 Employé
+### 👨‍💼 Employé (Employee)
 - Crée des demandes d'absence/congés
 - Visualise ses propres demandes et leur statut
-- Envoie des messages chiffrés aux RH
 - Supprime ses demandes en attente
+- Accès au **Module DAC** pour :
+  - Créer des documents
+  - Partager des documents avec d'autres utilisateurs
+  - Copier des documents (démonstration faiblesse DAC)
 
 ---
 
@@ -128,11 +134,11 @@ Le système bloque automatiquement les tentatives d'intrusion :
 ┌─────────────────────────────────────────────────────────┐
 │  Tentatives de connexion                                │
 │  ─────────────────────                                  │
-│  Tentative 1  ❌ Échec                                   │
-│  Tentative 2  ❌ Échec                                   │
-│  Tentative 3  ❌ Échec                                   │
-│  Tentative 4  ❌ Échec                                   │
-│  Tentative 5  ❌ Échec  ──► 🔒 COMPTE BLOQUÉ 5 min     │
+│  Tentative 1  ❌ Échec                                  │
+│  Tentative 2  ❌ Échec                                  │
+│  Tentative 3  ❌ Échec                                  │
+│  Tentative 4  ❌ Échec                                  │
+│  Tentative 5  ❌ Échec  ──► 🔒 COMPTE BLOQUÉ 5 min      │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -140,215 +146,220 @@ Le système bloque automatiquement les tentatives d'intrusion :
 - "Utilisateur n'existe pas" (404)
 - "Mot de passe incorrect" (401)
 - "Trop de tentatives. Réessayez dans Xm Ys" (429)
-- "Code OTP invalide ou expiré" (401)
+- "Code OTP invalide. Veuillez vous reconnecter." (401)
 
 **Sécurité :**
 - Blocage de 5 minutes après 5 tentatives échouées
 - S'applique aux connexions ET à la saisie du code OTP
 - Compteurs indépendants par utilisateur
+- OTP invalidé après une tentative échouée (protection renforcée)
 
 ---
 
-### 🔑 Échange de Clés Sécurisé (Diffie-Hellman)
+### 🔑 Workflow de Communication Sécurisée
 
-Avant d'envoyer des messages chiffrés, un secret partagé est établi :
+Le système implémente un workflow complet avec autorisation de l'administrateur :
 
 ```
-EMPLOYÉ                              RH MANAGER
-   │                                      │
-   │ 1. Génère clé privée a               │ 1. Génère clé privée b
-   │    Calcule clé publique A            │    Calcule clé publique B
-   │                                      │
-   │ 2. Envoie A ──────────────────────► │
-   │                                      │
-   │                                      │ 3. Calcule secret = B^a
-   │                                      │
-   │ ◄────────────────────── Envoie B    │
-   │                                      │
-   │ 4. Calcule secret = A^b              │
-   │                                      │
-   │ ✅ Secret partagé identique         │ ✅ Secret partagé identique
-   │    (jamais transmis sur le réseau)   │    (jamais transmis sur le réseau)
+EMPLOYÉ                 ADMIN (TTP)              RH MANAGER
+   │                        │                        │
+   │ 1. Crée demande congé  │                        │
+   ├────────────────────────►                        │
+   │                        │                        │
+   │                        │ 2. Voit demande        │
+   │                        │    d'autorisation      │
+   │                        │                        │
+   │                        │ 3. Approuve/Rejette    │
+   │                        │                        │
+   │ ◄──────────────────────┤                        │
+   │ Notification           │                        │
+   │                        │                        │
+   │ 4. Si approuvé:        │                        │
+   │    Échange DH          │                        │
+   │    ─────────────────────────────────────────────►
+   │                        │                        │
+   │ 5. Message chiffré     │                        │
+   │    AES-256             │                        │
+   │    ─────────────────────────────────────────────►
+   │                        │                        │
+   │                        │                        │ 6. Déchiffre
+   │                        │                        │    et traite
 ```
 
-**Avantages :**
-- Les clés privées ne quittent jamais le navigateur
-- Le secret partagé n'est jamais transmis
-- Résistant à l'interception (attaque du type "man-in-the-middle" passive)
+**Caractéristiques :**
+- L'Admin agit comme **Trusted Third Party (TTP)**
+- Aucune communication directe sans autorisation préalable
+- Échange de clés Diffie-Hellman 1536-bit
+- Chiffrement AES-256-CBC avec IV aléatoire
 
 ---
 
 ### 📝 Gestion des Demandes d'Absence/Congés
 
-**Diagramme de séquence - Création de demande :**
-
-```
-EMPLOYÉ                  SERVEUR                  RH MANAGER
-   │                        │                          │
-   │ 1. Remplit formulaire  │                          │
-   │    (dates, raison)     │                          │
-   │                        │                          │
-   │ 2. POST /leave-requests│                          │
-   ├────────────────────────►                          │
-   │                        │                          │
-   │                        │ 3. Vérifie rôle          │
-   │                        │    (employee?)           │
-   │                        │                          │
-   │                        │ 4. Enregistre demande    │
-   │                        │    (statut: pending)     │
-   │                        │                          │
-   │ ◄──────────────────────┤                          │
-   │  Confirmation          │                          │
-   │                        │                          │
-   │                        │    5. Notification       │
-   │                        ├─────────────────────────►│
-   │                        │                          │
-```
-
-**Diagramme de séquence - Approbation/Rejet :**
-
-```
-RH MANAGER              SERVEUR                 EMPLOYÉ
-   │                        │                       │
-   │ 1. Consulte demandes   │                       │
-   │    GET /all-requests   │                       │
-   ├────────────────────────►                       │
-   │                        │                       │
-   │ ◄──────────────────────┤                       │
-   │  Liste des demandes    │                       │
-   │                        │                       │
-   │ 2. Approuve/Rejette    │                       │
-   │    PUT /{id}/status    │                       │
-   ├────────────────────────►                       │
-   │                        │                       │
-   │                        │ 3. Met à jour statut  │
-   │                        │    + commentaire      │
-   │                        │                       │
-   │ ◄──────────────────────┤                       │
-   │  Confirmation          │                       │
-   │                        │                       │
-   │                        │    4. Employé voit    │
-   │                        │       le statut       │
-   │                        ├──────────────────────►│
-```
-
 **Cas d'usage typiques :**
 
 1. **Employé demande un congé :**
-   - Accède à l'onglet "Demandes d'absence"
+   - Accède à l'onglet "Demandes de congés"
    - Sélectionne le type (absence, congé)
    - Choisit les dates de début et fin
    - Le système calcule automatiquement le nombre de jours
    - Ajoute une justification
    - Soumet la demande (statut : "En attente")
 
-2. **RH traite les demandes :**
-   - Accède à l'onglet "Gestion des demandes"
+2. **Admin autorise la communication :**
+   - Voit les demandes d'autorisation pendantes
+   - Approuve ou rejette la transmission au RH
+   - Déclenche l'échange de clés si approuvé
+
+3. **RH traite les demandes :**
+   - Accède à l'onglet "Gestion des congés"
    - Visualise les statistiques (en attente, approuvées, rejetées)
    - Filtre les demandes par statut
    - Examine chaque demande en détail
    - Approuve ou rejette avec un commentaire optionnel
 
-3. **Employé consulte le statut :**
+4. **Employé consulte le statut :**
    - Voit toutes ses demandes avec leur statut
    - Peut supprimer les demandes encore en attente
    - Consulte les commentaires du RH sur les décisions
 
 ---
 
-### 💬 Messages Chiffrés
+## 4. Module DAC (Discretionary Access Control)
 
-Les employés peuvent envoyer des messages confidentiels aux RH :
+### 🔓 Objectif Pédagogique
+
+Ce module démontre les **faiblesses du modèle DAC** dans un contexte réel :
 
 ```
-EMPLOYÉ                                    RH MANAGER
-   │                                           │
-   │ 1. Rédige message                         │
-   │                                           │
-   │ 2. Chiffre avec AES-256                   │
-   │    (clé = secret DH)                      │
-   │                                           │
-   │ 3. POST /messages                         │
-   ├───────────────────────────────────────────►
-   │                                           │
-   │                                           │ 4. Stocke message
-   │                                           │    chiffré
-   │                                           │
-   │                                           │ 5. Consulte messages
-   │                                           │
-   │                                           │ 6. POST /{id}/decrypt
-   │                                           │
-   │                                           │ 7. Déchiffre avec
-   │                                           │    secret DH
-   │                                           │
-   │                                           │ ✅ Message en clair
+┌─────────────────────────────────────────────────────────────┐
+│                    MODÈLE DAC                               │
+│                                                             │
+│  ┌─────────────┐                    ┌─────────────┐        │
+│  │ Propriétaire│ ──── Décide ────►  │   Accès     │        │
+│  │ du document │      librement     │   Autres    │        │
+│  └─────────────┘                    └─────────────┘        │
+│                                                             │
+│  ⚠️ FAIBLESSES:                                            │
+│  • Pas de contrôle centralisé                              │
+│  • Propagation non contrôlée des droits                    │
+│  • Copie = perte des restrictions                          │
+│  • Vulnérable aux chevaux de Troie                         │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Sécurité :**
-- Chiffrement AES-256-CBC avec IV aléatoire
-- Les messages sont illisibles sur le serveur
-- Seul le destinataire possédant le secret DH peut déchiffrer
+### 📄 Fonctionnalités du Module DAC
+
+| Fonctionnalité | Description | Faiblesse démontrée |
+|----------------|-------------|---------------------|
+| **Création de document** | L'utilisateur crée un document dont il devient propriétaire | Le propriétaire a un contrôle total |
+| **Marquage confidentiel** | Option pour marquer un document comme "confidentiel" | ⚠️ N'empêche pas le partage ni la copie |
+| **Partage avec permissions** | Lecture, Écriture, Suppression, Partage | ⚠️ Permission "Partage" = propagation incontrôlée |
+| **Copie de document** | Copier le contenu vers un nouveau document | ⚠️ **Toutes les restrictions sont perdues!** |
+| **Révocation d'accès** | Le propriétaire peut retirer les accès | ⚠️ N'affecte pas les copies déjà faites |
+| **Logs d'audit** | Traçabilité de toutes les actions | Montre les failles en temps réel |
+
+### 🔴 Scénarios de Démonstration des Faiblesses
+
+#### Scénario 1 : Propagation Non Contrôlée
+```
+Employé A crée document CONFIDENTIEL
+        │
+        ▼ partage avec permission "Share"
+Employé B reçoit le document
+        │
+        ▼ re-partage (autorisé!)
+Employé C, D, E... ont accès
+        │
+        ▼
+⚠️ Aucun contrôle centralisé n'a pu empêcher cela
+```
+
+#### Scénario 2 : Copie = Perte des Restrictions
+```
+┌──────────────────────────────────────────────────────────┐
+│  Document Original                                       │
+│  ├── Propriétaire: Employé A                            │
+│  ├── Confidentiel: ✅ OUI                                │
+│  ├── Permissions: Lecture seule pour Employé B          │
+│  └── Restrictions: Pas de suppression, pas de partage   │
+└──────────────────────────────────────────────────────────┘
+                           │
+                           │ Employé B fait une COPIE
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│  Document Copié                                          │
+│  ├── Propriétaire: Employé B (NOUVEAU!)                 │
+│  ├── Confidentiel: ❌ NON                                │
+│  ├── Permissions: TOUTES (propriétaire)                 │
+│  └── Restrictions: AUCUNE                               │
+│                                                          │
+│  ⚠️ LES DONNÉES SONT LES MÊMES, LES PROTECTIONS SONT    │
+│     COMPLÈTEMENT PERDUES!                                │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 📊 Interface du Module DAC
+
+Le module est accessible via l'onglet **"🔓 Module DAC"** dans chaque dashboard :
+
+- **Documents** : Liste des documents avec permissions visuelles
+- **Audit Logs** : Historique avec warnings de sécurité en rouge
+- **Modals** : Création, Partage, Copie, Édition
+
+**Indicateurs visuels :**
+- 🔒 Document confidentiel
+- ⚠️ Warnings de sécurité DAC
+- Badges de permissions (R/W/D/S)
 
 ---
 
-## 4. Contrôles d'Accès (RBAC)
+## 5. Contrôles d'Accès
 
-Le système implémente un contrôle d'accès basé sur les rôles :
-
-### Matrice des Permissions
+### RBAC (Role-Based Access Control) - Système Principal
 
 | Fonctionnalité                      | Admin | RH Manager | Employé |
 |------------------------------------|-------|------------|---------|
 | **Authentification**               |       |            |         |
 | Se connecter avec MFA              | ✅    | ✅         | ✅      |
 | Recevoir code OTP                  | ✅    | ✅         | ✅      |
-| **Messages chiffrés**              |       |            |         |
-| Envoyer message chiffré            | ❌    | ✅         | ✅      |
-| Recevoir message chiffré           | ❌    | ✅         | ✅      |
-| Déchiffrer message                 | ❌    | ✅         | ✅      |
-| Supprimer message                  | ❌    | ✅         | ❌      |
-| Nettoyer messages incompatibles    | ❌    | ✅         | ❌      |
+| **Gestion des utilisateurs**       |       |            |         |
+| Créer un utilisateur               | ✅    | ❌         | ❌      |
+| **Autorisations communication**    |       |            |         |
+| Voir demandes d'autorisation       | ✅    | ❌         | ❌      |
+| Approuver/Rejeter autorisation     | ✅    | ❌         | ❌      |
 | **Demandes d'absence**             |       |            |         |
 | Créer demande                      | ❌    | ❌         | ✅      |
 | Voir ses propres demandes          | ❌    | ❌         | ✅      |
 | Voir toutes les demandes           | ❌    | ✅         | ❌      |
 | Approuver/Rejeter demande          | ❌    | ✅         | ❌      |
 | Supprimer sa demande (si pending)  | ❌    | ❌         | ✅      |
-| **Administration**                 |       |            |         |
-| Gérer utilisateurs                 | ✅    | ❌         | ❌      |
-| Voir tous les messages système     | ✅    | ❌         | ❌      |
+| **Messages système**               |       |            |         |
+| Voir tous les messages chiffrés    | ✅    | ❌         | ❌      |
 
-### Mécanisme de Contrôle
+### DAC (Discretionary Access Control) - Module Démonstration
 
-**Au niveau Backend :**
-- Chaque endpoint vérifie le JWT token
-- Le rôle est extrait du token (`current_user.role`)
-- Une exception `HTTPException(403)` est levée si le rôle est incorrect
+| Fonctionnalité                      | Propriétaire | Avec Read | Avec Write | Avec Delete | Avec Share |
+|------------------------------------|--------------|-----------|------------|-------------|------------|
+| Lire le document                   | ✅           | ✅        | ✅         | ✅          | ✅         |
+| Modifier le document               | ✅           | ❌        | ✅         | ❌          | ❌         |
+| Supprimer le document              | ✅           | ❌        | ❌         | ✅          | ❌         |
+| Partager le document               | ✅           | ❌        | ❌         | ❌          | ✅         |
+| Copier le document                 | ✅           | ✅        | ✅         | ✅          | ✅         |
+| Révoquer accès                     | ✅           | ❌        | ❌         | ❌          | ❌         |
 
-**Au niveau Frontend :**
-- Les composants sont conditionnellement affichés selon le rôle
-- Navigation restreinte selon les permissions
-- Les menus s'adaptent au profil utilisateur
-
-**Exemple de vérification :**
-```python
-# Backend - Vérification de rôle
-if current_user.role != "employee":
-    raise HTTPException(403, "Accès refusé")
-
-# Frontend - Affichage conditionnel
-{user.role === 'hr_manager' && <HRLeaveManagement />}
-```
+**⚠️ Note importante :** Tout utilisateur avec accès en lecture peut **copier** le document et devenir propriétaire de la copie avec **tous les droits**. C'est la principale faiblesse du DAC.
 
 ---
 
-## 5. Résumé des Fonctionnalités
+## 6. Résumé des Fonctionnalités
 
-### ✅ Sécurité
+### ✅ Sécurité (RBAC)
 - Authentification multi-facteurs (OTP par email)
-- Protection anti-brute force (5 tentatives)
+- Protection anti-brute force (5 tentatives, blocage 5 min)
+- Workflow d'autorisation par l'Admin (TTP)
 - Chiffrement de bout en bout (DH + AES-256)
-- Contrôle d'accès par rôle (RBAC)
+- Contrôle d'accès par rôle strict
 - Tokens JWT avec expiration
 
 ### ✅ Gestion RH
@@ -358,28 +369,57 @@ if current_user.role != "employee":
 - Historique des demandes avec statuts
 - Commentaires sur les décisions
 
-### ✅ Communication
-- Messages chiffrés entre utilisateurs
-- Échange de clés Diffie-Hellman
-- Déchiffrement sécurisé côté serveur
-- Nettoyage des messages incompatibles
+### ✅ Module DAC (Pédagogique)
+- Création et gestion de documents
+- Système de permissions granulaires
+- Partage avec ACL (Access Control List)
+- Copie de documents (démonstration faiblesse)
+- Logs d'audit avec warnings de sécurité
+- Visualisation des failles DAC en temps réel
 
 ### ✅ Expérience Utilisateur
-- Interface moderne avec Material Design
-- Notifications en temps réel
+- Interface moderne avec Material Design 3
+- Thème sombre/clair
 - Messages d'erreur clairs et en français
 - Formulaires intuitifs avec validation
 - Statistiques et tableaux de bord
+- Navigation par onglets
 
 ---
 
-## 6. Comptes de Test
+## 7. Comptes de Test
 
 | Email                        | Mot de passe | Rôle        |
 |------------------------------|--------------|-------------|
 | zeydody@gmail.com            | admin123     | Admin       |
 | zakarialaidi6@gmail.com      | hr123        | RH Manager  |
 | abdoumerabet374@gmail.com    | emp123       | Employé     |
+
+---
+
+## 8. Comparaison RBAC vs DAC
+
+| Critère | RBAC (Système principal) | DAC (Module démo) |
+|---------|--------------------------|-------------------|
+| **Contrôle** | Centralisé (Admin) | Décentralisé (Propriétaire) |
+| **Flexibilité** | Faible (rôles fixes) | Haute (permissions individuelles) |
+| **Sécurité** | ✅ Forte | ⚠️ Faible |
+| **Propagation** | Contrôlée | Non contrôlée |
+| **Copie de données** | N/A | Perte des restrictions |
+| **Audit** | Simple | Complexe |
+| **Cas d'usage** | Entreprise, conformité | Partage collaboratif |
+
+---
+
+## 9. Conclusion
+
+Ce système démontre deux approches de contrôle d'accès :
+
+1. **RBAC** pour les fonctionnalités critiques (authentification, gestion RH, communications sécurisées) - offrant une sécurité forte avec un contrôle centralisé.
+
+2. **DAC** via un module pédagogique qui illustre clairement pourquoi ce modèle n'est pas adapté aux données sensibles - démontrant les risques de propagation non contrôlée et de perte de restrictions lors de copies.
+
+**Recommandation :** Pour les systèmes manipulant des données sensibles, privilégier RBAC ou MAC (Mandatory Access Control) plutôt que DAC.
 
 ---
 

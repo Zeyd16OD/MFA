@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from datetime import datetime
 
 
@@ -134,3 +134,66 @@ class CommunicationAuthResponse(BaseModel):
 
 class CommunicationAuthUpdate(BaseModel):
     action: Literal["approve", "reject"]
+
+
+# ==================== DAC (Discretionary Access Control) Models ====================
+
+class DACPermission(BaseModel):
+    """Permission types for DAC"""
+    read: bool = False
+    write: bool = False
+    delete: bool = False
+    share: bool = False  # Can share with others (DAC weakness: propagation)
+
+
+class DACDocumentCreate(BaseModel):
+    """Create a new document with DAC"""
+    title: str
+    content: str
+    is_confidential: bool = False
+
+
+class DACDocumentUpdate(BaseModel):
+    """Update document content"""
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+
+class DACShareRequest(BaseModel):
+    """Share document with another user"""
+    target_user_id: int
+    permissions: DACPermission
+
+
+class DACDocumentResponse(BaseModel):
+    """Document response with permissions"""
+    id: int
+    title: str
+    content: str
+    owner_id: int
+    owner_email: str
+    is_confidential: bool
+    created_at: str
+    updated_at: Optional[str] = None
+    my_permissions: DACPermission
+    shared_with: Optional[List[dict]] = None  # List of users with their permissions
+
+
+class DACDocumentCopy(BaseModel):
+    """Copy document to create a new one (DAC weakness: data duplication)"""
+    new_title: str
+
+
+class DACAuditLog(BaseModel):
+    """Audit log for DAC operations - shows security issues"""
+    id: int
+    action: str  # created, shared, copied, accessed, modified, deleted
+    document_id: int
+    document_title: str
+    actor_id: int
+    actor_email: str
+    target_user_id: Optional[int] = None
+    target_user_email: Optional[str] = None
+    details: str
+    timestamp: str
+    security_warning: Optional[str] = None  # Highlights DAC weaknesses
