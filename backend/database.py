@@ -21,6 +21,11 @@ class Database:
         self.otp_attempts = self.db.table('otp_attempts')  # Track OTP attempts
         self.leave_requests = self.db.table('leave_requests')  # Leave/Absence requests
         self.communication_auth = self.db.table('communication_auth')  # Communication authorization requests
+        
+        # ============ DAC FEATURES ============
+        self.documents = self.db.table('documents')  # Documents (Fonctionnalité 1)
+        self.document_acls = self.db.table('document_acls')  # ACL pour documents
+        self.delegations = self.db.table('delegations')  # Délégations (Fonctionnalité 2)
     
     # User Operations
     def create_user(self, email: str, password_hash: str, role: str, public_key_cert: str = None) -> int:
@@ -364,6 +369,166 @@ class Database:
         """Get all communication authorizations for an employee."""
         Auth = Query()
         return self.communication_auth.search(Auth.employee_id == employee_id)
+    
+    # ================================================================
+    # FONCTIONNALITÉ 1: GESTION DES DOCUMENTS (DAC - Matrice HRU)
+    # ================================================================
+    
+    def create_document(self, owner_id: int, owner_email: str, title: str, 
+                       content: str, is_confidential: bool = False) -> int:
+        """Créer un nouveau document. Le créateur devient propriétaire (own)."""
+        doc_id = self.documents.insert({
+            'owner_id': owner_id,
+            'owner_email': owner_email,
+            'title': title,
+            'content': content,
+            'is_confidential': is_confidential,
+            'created_at': datetime.utcnow().isoformat()
+        })
+        return doc_id
+    
+    def get_document(self, doc_id: int) -> Optional[dict]:
+        """Récupérer un document par ID."""
+        return self.documents.get(doc_id=doc_id)
+    
+    def get_documents_by_owner(self, owner_id: int) -> List[dict]:
+        """Récupérer tous les documents d'un propriétaire."""
+        Doc = Query()
+        return self.documents.search(Doc.owner_id == owner_id)
+    
+    def get_all_documents(self) -> List[dict]:
+        """Récupérer tous les documents."""
+        return self.documents.all()
+    
+    def delete_document(self, doc_id: int):
+        """Supprimer un document et ses ACLs."""
+        self.documents.remove(doc_ids=[doc_id])
+        ACL = Query()
+        self.document_acls.remove(ACL.document_id == doc_id)
+    
+    # ACL Operations (Matrice d'accès)
+    def create_document_acl(self, document_id: int, user_id: int, user_email: str,
+                           permissions: List[str], can_reshare: bool, 
+                           granted_by: int, granted_by_email: str, is_dac_mode: bool) -> int:
+        """Créer une entrée ACL pour un document (CONFER operation dans HRU)."""
+        acl_id = self.document_acls.insert({
+            'document_id': document_id,
+            'user_id': user_id,
+            'user_email': user_email,
+            'permissions': permissions,
+            'can_reshare': can_reshare,  # DAC: True, Sécurisé: False (transfer_only)
+            'granted_by': granted_by,
+            'granted_by_email': granted_by_email,
+            'is_dac_mode': is_dac_mode,
+            'created_at': datetime.utcnow().isoformat()
+        })
+        return acl_id
+    
+    def get_document_acl(self, acl_id: int) -> Optional[dict]:
+        """Récupérer une ACL par ID."""
+        return self.document_acls.get(doc_id=acl_id)
+    
+    def get_acls_for_document(self, document_id: int) -> List[dict]:
+        """Récupérer toutes les ACLs d'un document."""
+        ACL = Query()
+        return self.document_acls.search(ACL.document_id == document_id)
+    
+    def get_acls_for_user(self, user_id: int) -> List[dict]:
+        """Récupérer toutes les ACLs d'un utilisateur."""
+        ACL = Query()
+        return self.document_acls.search(ACL.user_id == user_id)
+    
+    def get_user_document_acl(self, document_id: int, user_id: int) -> Optional[dict]:
+        """Vérifier si un utilisateur a des droits sur un document."""
+        ACL = Query()
+        result = self.document_acls.search((ACL.document_id == document_id) & (ACL.user_id == user_id))
+        return result[0] if result else None
+    
+    def delete_document_acl(self, acl_id: int):
+        """Révoquer une ACL (REVOKE operation dans HRU)."""
+        self.document_acls.remove(doc_ids=[acl_id])
+    
+    def get_all_document_acls(self) -> List[dict]:
+        """Récupérer toutes les ACLs (pour visualisation de la matrice)."""
+        return self.document_acls.all()
+    
+    # ================================================================
+    # FONCTIONNALITÉ 2: DÉLÉGATION DE DROITS (DAC - Take-Grant)
+    # ================================================================
+    
+    def create_delegation(self, delegator_id: int, delegator_email: str,
+                         delegate_id: int, delegate_email: str,
+                         rights: List[str], can_redelegate: bool,
+                         max_depth: int, current_depth: int,
+                         expires_at: str, is_dac_mode: bool) -> int:
+        """Créer une délégation (GRANT operation dans Take-Grant)."""
+        delegation_id = self.delegations.insert({
+            'delegator_id': delegator_id,
+            'delegator_email': delegator_email,
+            'delegate_id': delegate_id,
+            'delegate_email': delegate_email,
+            'rights': rights,
+            'can_redelegate': can_redelegate,  # DAC: True si 'delegate' dans rights
+            'max_depth': max_depth,  # Sécurisé: limite de profondeur
+            'current_depth': current_depth,  # Profondeur actuelle dans la chaîne
+            'expires_at': expires_at,  # Sécurisé: expiration
+            'is_dac_mode': is_dac_mode,
+            'is_active': True,
+            'created_at': datetime.utcnow().isoformat()
+        })
+        return delegation_id
+    
+    def get_delegation(self, delegation_id: int) -> Optional[dict]:
+        """Récupérer une délégation par ID."""
+        return self.delegations.get(doc_id=delegation_id)
+    
+    def get_delegations_by_delegator(self, delegator_id: int) -> List[dict]:
+        """Récupérer toutes les délégations créées par un utilisateur."""
+        Delegation = Query()
+        return self.delegations.search(Delegation.delegator_id == delegator_id)
+    
+    def get_delegations_for_delegate(self, delegate_id: int) -> List[dict]:
+        """Récupérer toutes les délégations reçues par un utilisateur."""
+        Delegation = Query()
+        return self.delegations.search(Delegation.delegate_id == delegate_id)
+    
+    def get_active_delegations_for_delegate(self, delegate_id: int) -> List[dict]:
+        """Récupérer les délégations actives et non expirées."""
+        Delegation = Query()
+        all_delegations = self.delegations.search(
+            (Delegation.delegate_id == delegate_id) & (Delegation.is_active == True)
+        )
+        # Filtrer les expirées
+        now = datetime.utcnow()
+        active = []
+        for d in all_delegations:
+            if d.get('expires_at'):
+                expires = datetime.fromisoformat(d['expires_at'])
+                if now < expires:
+                    active.append(d)
+            else:
+                active.append(d)  # DAC mode sans expiration
+        return active
+    
+    def revoke_delegation(self, delegation_id: int):
+        """Révoquer une délégation."""
+        self.delegations.update({'is_active': False}, doc_ids=[delegation_id])
+    
+    def get_all_delegations(self) -> List[dict]:
+        """Récupérer toutes les délégations (pour visualisation)."""
+        return self.delegations.all()
+    
+    def get_delegation_chain(self, user_id: int) -> List[dict]:
+        """Récupérer la chaîne de délégation pour un utilisateur."""
+        chain = []
+        Delegation = Query()
+        current = self.delegations.search(Delegation.delegate_id == user_id)
+        for d in current:
+            chain.append(d)
+            if d['delegator_id'] != user_id:
+                parent_chain = self.get_delegation_chain(d['delegator_id'])
+                chain.extend(parent_chain)
+        return chain
     
     def close(self):
         """Close database connection."""

@@ -5,6 +5,7 @@ from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 from typing import Optional
 from contextlib import asynccontextmanager
 import json
+from datetime import datetime, timedelta
 
 from config import settings
 from models import (
@@ -12,7 +13,10 @@ from models import (
     DHParams, DHExchangeRequest, DHExchangeResponse,
     EncryptedMessage, LeaveRequest, MessageInDB,
     LeaveRequestCreate, LeaveRequestUpdate, LeaveRequestResponse,
-    CommunicationAuthResponse, CommunicationAuthUpdate
+    CommunicationAuthResponse, CommunicationAuthUpdate,
+    # DAC Models
+    DocumentCreate, DocumentResponse, DocumentShareDAC, DocumentShareSecure, DocumentACLEntry,
+    DelegationCreateDAC, DelegationCreateSecure, DelegationResponse
 )
 from typing import List
 from security import (
@@ -126,7 +130,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             detail="User not found"
         )
     
-    return user
+    # Include the document ID in the returned dict for easy access
+    user_dict = dict(user)
+    user_dict['id'] = user.doc_id
+    return user_dict
 
 
 # Background task to send email
@@ -308,7 +315,7 @@ async def cancel_otp(request: dict):
 async def get_me(current_user: dict = Depends(get_current_user)):
     """Get current authenticated user."""
     return User(
-        id=current_user.doc_id,
+        id=current_user['id'],
         email=current_user['email'],
         role=current_user['role'],
         public_key_certificate=current_user.get('public_key_certificate')
@@ -1065,8 +1072,710 @@ async def root():
     return {
         "status": "online",
         "service": "Secure HR Management System",
-        "version": "1.0.0"
+        "version": "2.0.0 - DAC Features"
     }
+
+
+# ================================================================
+# FONCTIONNALITÉ 1: PARTAGE DE DOCUMENTS (DAC - Matrice HRU)
+# ================================================================
+# 
+# Implémentation de la matrice de contrôle d'accès selon le modèle HRU:
+# - Sujets (S): Utilisateurs du système
+# - Objets (O): Documents
+# - Actions (A): read, write, share
+# 
+# FAIBLESSE DAC: L'opérateur "share" permet la propagation non contrôlée des privilèges
+# SOLUTION: Flag "transfer_only" (can_reshare=False) empêche la re-propagation
+# ================================================================
+
+@app.post("/documents", tags=["DAC - Documents"])
+async def create_document(
+    doc: DocumentCreate,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Créer un nouveau document. Le créateur devient PROPRIÉTAIRE (own).
+    Equivalent à l'opération CREATE dans HRU: create object + enter Own
+    """
+    user = await get_current_user(credentials)
+    
+    doc_id = db.create_document(
+        owner_id=user['id'],
+        owner_email=user['email'],
+        title=doc.title,
+        content=doc.content,
+        is_confidential=doc.is_confidential
+    )
+    
+    return {
+        "message": "Document créé avec succès",
+        "document_id": doc_id,
+        "owner": user['email'],
+        "acl_entry": f"A[{user['email']}, doc_{doc_id}] = {{own, read, write, share}}"
+    }
+
+
+@app.get("/documents/{doc_id}", tags=["DAC - Documents"])
+async def get_document(
+    doc_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Consulter un document spécifique.
+    Vérifie que l'utilisateur a accès (propriétaire ou ACL avec 'read').
+    """
+    user = await get_current_user(credentials)
+    
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document non trouvé")
+    
+    # Vérifier l'accès
+    is_owner = doc['owner_id'] == user['id']
+    user_acl = db.get_user_document_acl(doc_id, user['id'])
+    
+    if not is_owner and not user_acl:
+        raise HTTPException(status_code=403, detail="Accès refusé à ce document")
+    
+    if not is_owner and 'read' not in user_acl.get('permissions', []):
+        raise HTTPException(status_code=403, detail="Permission 'read' requise")
+    
+    # Retourner le document avec les infos d'accès
+    return {
+        "id": doc.doc_id,
+        "title": doc['title'],
+        "content": doc['content'],
+        "is_confidential": doc['is_confidential'],
+        "owner_email": doc['owner_email'],
+        "is_owner": is_owner,
+        "permissions": ["own", "read", "write", "share"] if is_owner else user_acl['permissions'],
+        "can_reshare": True if is_owner else user_acl.get('can_reshare', False),
+        "is_dac_mode": None if is_owner else user_acl.get('is_dac_mode'),
+        "granted_by": None if is_owner else user_acl.get('granted_by_email'),
+        "created_at": doc['created_at']
+    }
+
+
+@app.get("/documents", tags=["DAC - Documents"])
+async def get_my_documents(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Récupérer mes documents (propriétaire) et ceux partagés avec moi."""
+    user = await get_current_user(credentials)
+    
+    # Documents dont je suis propriétaire
+    owned = db.get_documents_by_owner(user['id'])
+    owned_docs = []
+    for doc in owned:
+        owned_docs.append({
+            "id": doc.doc_id,
+            "title": doc['title'],
+            "content": doc['content'],
+            "is_confidential": doc['is_confidential'],
+            "owner_email": doc['owner_email'],
+            "is_owner": True,
+            "permissions": ["own", "read", "write", "share"],
+            "created_at": doc['created_at']
+        })
+    
+    # Documents partagés avec moi
+    acls = db.get_acls_for_user(user['id'])
+    shared_docs = []
+    for acl in acls:
+        doc = db.get_document(acl['document_id'])
+        if doc:
+            shared_docs.append({
+                "id": doc.doc_id,
+                "title": doc['title'],
+                "content": doc['content'] if 'read' in acl['permissions'] else "[ACCÈS REFUSÉ]",
+                "is_confidential": doc['is_confidential'],
+                "owner_email": doc['owner_email'],
+                "is_owner": False,
+                "permissions": acl['permissions'],
+                "can_reshare": acl['can_reshare'],
+                "is_dac_mode": acl['is_dac_mode'],
+                "granted_by": acl['granted_by_email'],
+                "created_at": acl['created_at']
+            })
+    
+    return {
+        "owned_documents": owned_docs,
+        "shared_documents": shared_docs
+    }
+
+
+@app.post("/documents/share/dac", tags=["DAC - Documents"])
+async def share_document_dac(
+    share: DocumentShareDAC,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    🔴 MODE DAC (VULNÉRABLE) - Partage avec propagation possible
+    
+    Implémente l'opération CONFER avec marque de copie (*):
+    - Si 'share' est dans permissions, le destinataire peut RE-PARTAGER
+    - FAIBLESSE: Propagation non contrôlée des privilèges (problème de sûreté HRU)
+    """
+    user = await get_current_user(credentials)
+    
+    # Vérifier que le document existe
+    doc = db.get_document(share.document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document non trouvé")
+    
+    # Vérifier les droits de partage
+    is_owner = doc['owner_id'] == user['id']
+    user_acl = db.get_user_document_acl(share.document_id, user['id'])
+    
+    if not is_owner:
+        if not user_acl:
+            raise HTTPException(status_code=403, detail="Vous n'avez pas accès à ce document")
+        if not user_acl.get('can_reshare', False):
+            raise HTTPException(
+                status_code=403, 
+                detail="🔒 MODE SÉCURISÉ: Vous ne pouvez pas re-partager ce document (flag transfer_only)"
+            )
+    
+    # Vérifier que le destinataire existe
+    target = db.get_user_by_id(share.target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Utilisateur destinataire non trouvé")
+    
+    # Vérifier si déjà partagé
+    existing = db.get_user_document_acl(share.document_id, share.target_user_id)
+    if existing:
+        raise HTTPException(status_code=400, detail="Document déjà partagé avec cet utilisateur")
+    
+    # Créer l'ACL avec can_reshare=True si 'share' dans permissions (FAIBLESSE DAC!)
+    can_reshare = 'share' in share.permissions
+    
+    acl_id = db.create_document_acl(
+        document_id=share.document_id,
+        user_id=share.target_user_id,
+        user_email=target['email'],
+        permissions=share.permissions,
+        can_reshare=can_reshare,  # ⚠️ FAIBLESSE: permet re-partage
+        granted_by=user['id'],
+        granted_by_email=user['email'],
+        is_dac_mode=True
+    )
+    
+    return {
+        "message": "🔴 Document partagé (MODE DAC - VULNÉRABLE)",
+        "warning": "⚠️ FAIBLESSE DAC: Le destinataire peut RE-PARTAGER ce document à d'autres!",
+        "acl_id": acl_id,
+        "document_id": share.document_id,
+        "shared_with": target['email'],
+        "permissions": share.permissions,
+        "can_reshare": can_reshare,
+        "hru_operation": f"CONFER: enter {share.permissions}{'*' if can_reshare else ''} into A[{target['email']}, doc_{share.document_id}]"
+    }
+
+
+@app.post("/documents/share/secure", tags=["DAC - Documents"])
+async def share_document_secure(
+    share: DocumentShareSecure,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    🟢 MODE SÉCURISÉ - Partage avec flag 'transfer_only'
+    
+    SOLUTION au problème de sûreté HRU:
+    - Par défaut can_reshare=False (flag transfer_only)
+    - Le destinataire NE PEUT PAS re-partager le document
+    - Contrôle strict de la propagation des privilèges
+    """
+    user = await get_current_user(credentials)
+    
+    # Vérifier que le document existe
+    doc = db.get_document(share.document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document non trouvé")
+    
+    # Seul le propriétaire peut partager en mode sécurisé (ou ceux avec can_reshare ET share.can_reshare=True)
+    is_owner = doc['owner_id'] == user['id']
+    user_acl = db.get_user_document_acl(share.document_id, user['id'])
+    
+    if not is_owner:
+        if not user_acl:
+            raise HTTPException(status_code=403, detail="Vous n'avez pas accès à ce document")
+        if not user_acl.get('can_reshare', False):
+            raise HTTPException(status_code=403, detail="Vous ne pouvez pas partager ce document")
+    
+    # Vérifier que le destinataire existe
+    target = db.get_user_by_id(share.target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Utilisateur destinataire non trouvé")
+    
+    # Vérifier si déjà partagé
+    existing = db.get_user_document_acl(share.document_id, share.target_user_id)
+    if existing:
+        raise HTTPException(status_code=400, detail="Document déjà partagé avec cet utilisateur")
+    
+    acl_id = db.create_document_acl(
+        document_id=share.document_id,
+        user_id=share.target_user_id,
+        user_email=target['email'],
+        permissions=share.permissions,
+        can_reshare=share.can_reshare,  # ✅ Par défaut False (transfer_only)
+        granted_by=user['id'],
+        granted_by_email=user['email'],
+        is_dac_mode=False
+    )
+    
+    return {
+        "message": "🟢 Document partagé (MODE SÉCURISÉ)",
+        "solution": "✅ Flag 'transfer_only': Le destinataire NE PEUT PAS re-partager ce document",
+        "acl_id": acl_id,
+        "document_id": share.document_id,
+        "shared_with": target['email'],
+        "permissions": share.permissions,
+        "can_reshare": share.can_reshare,
+        "hru_operation": f"CONFER: enter {share.permissions} (transfer_only) into A[{target['email']}, doc_{share.document_id}]"
+    }
+
+
+@app.get("/documents/acl-matrix", tags=["DAC - Documents"])
+async def get_acl_matrix(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Visualiser la MATRICE DE CONTRÔLE D'ACCÈS complète (Admin only).
+    Représentation de A[sujet, objet] = {actions}
+    """
+    user = await get_current_user(credentials)
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin uniquement")
+    
+    documents = db.get_all_documents()
+    acls = db.get_all_document_acls()
+    
+    # Construire la matrice
+    matrix = {}
+    
+    # Ajouter les propriétaires
+    for doc in documents:
+        owner_email = doc['owner_email']
+        doc_name = f"doc_{doc.doc_id}:{doc['title'][:20]}"
+        
+        if owner_email not in matrix:
+            matrix[owner_email] = {}
+        matrix[owner_email][doc_name] = ["own", "read", "write", "share"]
+    
+    # Ajouter les ACLs
+    for acl in acls:
+        user_email = acl['user_email']
+        doc = db.get_document(acl['document_id'])
+        if doc:
+            doc_name = f"doc_{acl['document_id']}:{doc['title'][:20]}"
+            
+            if user_email not in matrix:
+                matrix[user_email] = {}
+            
+            perms = acl['permissions'].copy()
+            if acl['can_reshare']:
+                perms = [f"{p}*" for p in perms]  # Marque de copie
+            matrix[user_email][doc_name] = {
+                "permissions": perms,
+                "mode": "DAC" if acl['is_dac_mode'] else "SECURE",
+                "granted_by": acl['granted_by_email']
+            }
+    
+    return {
+        "title": "Matrice de Contrôle d'Accès (HRU)",
+        "legend": {
+            "*": "Marque de copie - peut transférer ce privilège (FAIBLESSE DAC)",
+            "own": "Propriétaire du document",
+            "DAC": "Mode vulnérable - re-partage possible",
+            "SECURE": "Mode sécurisé - transfer_only"
+        },
+        "matrix": matrix,
+        "total_documents": len(documents),
+        "total_acls": len(acls)
+    }
+
+
+@app.delete("/documents/{doc_id}/acl/{user_id}", tags=["DAC - Documents"])
+async def revoke_document_access(
+    doc_id: int,
+    user_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    RÉVOQUER l'accès d'un utilisateur à un document (REVOKE dans HRU).
+    Seul le propriétaire peut révoquer.
+    """
+    user = await get_current_user(credentials)
+    
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document non trouvé")
+    
+    if doc['owner_id'] != user['id']:
+        raise HTTPException(status_code=403, detail="Seul le propriétaire peut révoquer les accès")
+    
+    acl = db.get_user_document_acl(doc_id, user_id)
+    if not acl:
+        raise HTTPException(status_code=404, detail="Cet utilisateur n'a pas accès au document")
+    
+    db.delete_document_acl(acl.doc_id)
+    
+    target = db.get_user_by_id(user_id)
+    
+    return {
+        "message": "Accès révoqué avec succès",
+        "hru_operation": f"REVOKE: delete * from A[{target['email'] if target else user_id}, doc_{doc_id}]"
+    }
+
+
+# ================================================================
+# FONCTIONNALITÉ 2: DÉLÉGATION DE DROITS (DAC - Take-Grant)
+# ================================================================
+#
+# Implémentation du modèle Take-Grant:
+# - Nœuds: Utilisateurs (sujets)
+# - Arcs: Délégations avec droits (t=take, g=grant)
+#
+# FAIBLESSE DAC: Chaîne de délégation non contrôlée (prédicat 'can' toujours vrai via chemin tg)
+# SOLUTION: Profondeur limitée + Expiration temporelle
+# ================================================================
+
+@app.post("/delegations/dac", tags=["DAC - Délégations"])
+async def create_delegation_dac(
+    delegation: DelegationCreateDAC,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    🔴 MODE DAC (VULNÉRABLE) - Délégation avec re-délégation possible
+    
+    Implémente l'opération GRANT du modèle Take-Grant:
+    - Si 'delegate' est dans rights, le délégué peut RE-DÉLÉGUER
+    - FAIBLESSE: Chaîne de délégation non contrôlée
+    - Théorème Take-Grant: "can" est vrai s'il existe un chemin tg entre les sujets
+    """
+    user = await get_current_user(credentials)
+    
+    # Vérifier les droits de délégation:
+    # 1. Admin ou HR peuvent toujours déléguer
+    # 2. OU l'utilisateur a reçu une délégation DAC avec can_redelegate=true
+    can_delegate = user['role'] in ['hr_manager', 'admin']
+    user_received_delegations = db.get_active_delegations_for_delegate(user['id'])
+    dac_delegation_with_redelegate = None
+    
+    if not can_delegate:
+        # Chercher une délégation DAC qui permet la re-délégation
+        for d in user_received_delegations:
+            if d['is_dac_mode'] and d['can_redelegate'] and d['is_active']:
+                can_delegate = True
+                dac_delegation_with_redelegate = d
+                break
+    
+    if not can_delegate:
+        raise HTTPException(
+            status_code=403, 
+            detail="Vous n'avez pas le droit de déléguer. Vous devez être HR/Admin ou avoir reçu une délégation DAC avec droit de re-délégation."
+        )
+    
+    # Vérifier que le délégué existe
+    delegate = db.get_user_by_id(delegation.delegate_to_user_id)
+    if not delegate:
+        raise HTTPException(status_code=404, detail="Utilisateur délégué non trouvé")
+    
+    # Vérifier qu'on ne délègue pas à soi-même
+    if delegate.doc_id == user['id']:
+        raise HTTPException(status_code=400, detail="Impossible de déléguer à soi-même")
+    
+    can_redelegate = 'delegate' in delegation.rights
+    
+    # Si on re-délègue, on hérite des droits de la délégation reçue (ne peut pas donner plus)
+    final_rights = delegation.rights
+    if dac_delegation_with_redelegate:
+        # Limiter aux droits reçus (on ne peut pas donner plus qu'on a)
+        final_rights = [r for r in delegation.rights if r in dac_delegation_with_redelegate['rights'] or r == 'delegate']
+    
+    delegation_id = db.create_delegation(
+        delegator_id=user['id'],
+        delegator_email=user['email'],
+        delegate_id=delegation.delegate_to_user_id,
+        delegate_email=delegate['email'],
+        rights=final_rights,
+        can_redelegate=can_redelegate,  # ⚠️ FAIBLESSE
+        max_depth=-1,  # Illimité en mode DAC
+        current_depth=0,
+        expires_at=None,  # Pas d'expiration en mode DAC
+        is_dac_mode=True
+    )
+    
+    re_delegation_info = ""
+    if dac_delegation_with_redelegate:
+        re_delegation_info = f" (RE-DÉLÉGATION depuis {dac_delegation_with_redelegate['delegator_email']})"
+    
+    return {
+        "message": f"🔴 Délégation créée (MODE DAC - VULNÉRABLE){re_delegation_info}",
+        "warning": "⚠️ FAIBLESSE Take-Grant: Le délégué peut RE-DÉLÉGUER sans limite!",
+        "delegation_id": delegation_id,
+        "delegator": user['email'],
+        "delegate": delegate['email'],
+        "rights": final_rights,
+        "can_redelegate": can_redelegate,
+        "is_redelegation": dac_delegation_with_redelegate is not None,
+        "expires_at": None,
+        "take_grant_operation": f"GRANT: Arc g de {user['email']} vers {delegate['email']} avec droits {final_rights}"
+    }
+
+
+@app.post("/delegations/secure", tags=["DAC - Délégations"])
+async def create_delegation_secure(
+    delegation: DelegationCreateSecure,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    🟢 MODE SÉCURISÉ - Délégation avec limites
+    
+    SOLUTIONS aux faiblesses Take-Grant:
+    1. max_depth: Limite la profondeur de re-délégation (0 = ne peut pas)
+    2. expires_in_hours: Expiration temporelle de la délégation
+    
+    Ces restrictions cassent le théorème "can" de Take-Grant.
+    """
+    user = await get_current_user(credentials)
+    
+    # Vérifier les droits de délégation:
+    # 1. Admin ou HR peuvent toujours déléguer
+    # 2. OU l'utilisateur a reçu une délégation sécurisée avec can_redelegate=true et max_depth > current_depth
+    can_delegate = user['role'] in ['hr_manager', 'admin']
+    user_delegations = db.get_active_delegations_for_delegate(user['id'])
+    parent_delegation = None
+    current_depth = 0
+    
+    if not can_delegate:
+        # Chercher une délégation sécurisée qui permet la re-délégation
+        for d in user_delegations:
+            if not d['is_dac_mode'] and d['can_redelegate'] and d['is_active']:
+                # Vérifier la profondeur
+                if d['max_depth'] > d['current_depth'] + 1:
+                    can_delegate = True
+                    parent_delegation = d
+                    current_depth = d['current_depth'] + 1
+                    break
+                else:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"🔒 Profondeur maximale atteinte ({d['max_depth']}). Impossible de re-déléguer."
+                    )
+    
+    if not can_delegate:
+        raise HTTPException(
+            status_code=403, 
+            detail="Vous n'avez pas le droit de déléguer. Vous devez être HR/Admin ou avoir reçu une délégation avec droit de re-délégation."
+        )
+    
+    # Vérifier que le délégué existe
+    delegate = db.get_user_by_id(delegation.delegate_to_user_id)
+    if not delegate:
+        raise HTTPException(status_code=404, detail="Utilisateur délégué non trouvé")
+    
+    if delegate.doc_id == user['id']:
+        raise HTTPException(status_code=400, detail="Impossible de déléguer à soi-même")
+    
+    # Calculer max_depth effectif (ne peut pas dépasser celui du parent)
+    effective_max_depth = delegation.max_depth
+    if parent_delegation:
+        remaining_depth = parent_delegation['max_depth'] - current_depth
+        effective_max_depth = min(delegation.max_depth, remaining_depth)
+    
+    expires_at = (datetime.utcnow() + timedelta(hours=delegation.expires_in_hours)).isoformat()
+    
+    # Si on re-délègue, limiter aux droits reçus
+    final_rights = delegation.rights
+    if parent_delegation:
+        final_rights = [r for r in delegation.rights if r in parent_delegation['rights']]
+    
+    delegation_id = db.create_delegation(
+        delegator_id=user['id'],
+        delegator_email=user['email'],
+        delegate_id=delegation.delegate_to_user_id,
+        delegate_email=delegate['email'],
+        rights=final_rights,
+        can_redelegate=effective_max_depth > 0,  # Peut re-déléguer si depth > 0
+        max_depth=effective_max_depth,  # ✅ SOLUTION 1: Limite de profondeur
+        current_depth=current_depth,
+        expires_at=expires_at,  # ✅ SOLUTION 2: Expiration
+        is_dac_mode=False
+    )
+    
+    re_delegation_info = ""
+    if parent_delegation:
+        re_delegation_info = f" (RE-DÉLÉGATION niveau {current_depth}/{parent_delegation['max_depth']})"
+    
+    return {
+        "message": f"🟢 Délégation créée (MODE SÉCURISÉ){re_delegation_info}",
+        "solutions": {
+            "profondeur": f"Max {effective_max_depth} niveaux de re-délégation restants",
+            "expiration": f"Expire dans {delegation.expires_in_hours} heures"
+        },
+        "delegation_id": delegation_id,
+        "delegator": user['email'],
+        "delegate": delegate['email'],
+        "rights": final_rights,
+        "max_depth": effective_max_depth,
+        "current_depth": current_depth,
+        "can_redelegate": effective_max_depth > 0,
+        "is_redelegation": parent_delegation is not None,
+        "expires_at": expires_at
+    }
+
+
+@app.get("/delegations/my", tags=["DAC - Délégations"])
+async def get_my_delegations(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Récupérer mes délégations (données et reçues)."""
+    user = await get_current_user(credentials)
+    
+    given = db.get_delegations_by_delegator(user['id'])
+    received = db.get_active_delegations_for_delegate(user['id'])
+    
+    return {
+        "delegations_given": [{
+            "id": d.doc_id,
+            "delegate": d['delegate_email'],
+            "rights": d['rights'],
+            "mode": "DAC" if d['is_dac_mode'] else "SECURE",
+            "is_active": d['is_active'],
+            "expires_at": d.get('expires_at'),
+            "created_at": d['created_at']
+        } for d in given],
+        "delegations_received": [{
+            "id": d.doc_id,
+            "delegator": d['delegator_email'],
+            "rights": d['rights'],
+            "mode": "DAC" if d['is_dac_mode'] else "SECURE",
+            "can_redelegate": d['can_redelegate'],
+            "max_depth": d['max_depth'],
+            "current_depth": d['current_depth'],
+            "expires_at": d.get('expires_at'),
+            "created_at": d['created_at']
+        } for d in received]
+    }
+
+
+@app.get("/delegations/graph", tags=["DAC - Délégations"])
+async def get_delegation_graph(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Visualiser le GRAPHE DE DÉLÉGATION Take-Grant (Admin only).
+    Les nœuds sont les utilisateurs, les arcs sont les délégations.
+    """
+    user = await get_current_user(credentials)
+    if user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Admin uniquement")
+    
+    all_delegations = db.get_all_delegations()
+    
+    nodes = set()
+    edges = []
+    
+    for d in all_delegations:
+        nodes.add(d['delegator_email'])
+        nodes.add(d['delegate_email'])
+        
+        edge_label = f"{d['rights']}"
+        if d['is_dac_mode']:
+            edge_label += " [DAC:∞]"
+        else:
+            edge_label += f" [depth:{d['max_depth']}]"
+        
+        edges.append({
+            "from": d['delegator_email'],
+            "to": d['delegate_email'],
+            "rights": d['rights'],
+            "label": edge_label,
+            "mode": "DAC" if d['is_dac_mode'] else "SECURE",
+            "is_active": d['is_active'],
+            "expires_at": d.get('expires_at')
+        })
+    
+    # Analyser les chemins tg (Take-Grant vulnerability)
+    tg_paths = []
+    for node in nodes:
+        # Chercher les chemins depuis ce nœud
+        visited = set()
+        queue = [(node, [node])]
+        while queue:
+            current, path = queue.pop(0)
+            for e in edges:
+                if e['from'] == current and e['to'] not in visited and e['is_active']:
+                    new_path = path + [e['to']]
+                    if len(new_path) > 2:
+                        tg_paths.append({
+                            "path": " → ".join(new_path),
+                            "vulnerability": "DAC" in [ed['mode'] for ed in edges if ed['from'] in new_path[:-1] and ed['to'] in new_path[1:]]
+                        })
+                    visited.add(e['to'])
+                    queue.append((e['to'], new_path))
+    
+    return {
+        "title": "Graphe de Délégation (Take-Grant)",
+        "legend": {
+            "DAC:∞": "Mode DAC - re-délégation illimitée (VULNÉRABLE)",
+            "depth:N": "Mode sécurisé - max N niveaux de re-délégation"
+        },
+        "nodes": list(nodes),
+        "edges": edges,
+        "tg_paths": tg_paths[:10],  # Limiter à 10 chemins
+        "vulnerability_analysis": {
+            "dac_edges": len([e for e in edges if e['mode'] == 'DAC' and e['is_active']]),
+            "secure_edges": len([e for e in edges if e['mode'] == 'SECURE' and e['is_active']]),
+            "warning": "Les arcs DAC permettent une propagation non contrôlée des droits!"
+        }
+    }
+
+
+@app.delete("/delegations/{delegation_id}", tags=["DAC - Délégations"])
+async def revoke_delegation(
+    delegation_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Révoquer une délégation."""
+    user = await get_current_user(credentials)
+    
+    delegation = db.get_delegation(delegation_id)
+    if not delegation:
+        raise HTTPException(status_code=404, detail="Délégation non trouvée")
+    
+    if delegation['delegator_id'] != user['id'] and user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Vous ne pouvez pas révoquer cette délégation")
+    
+    db.revoke_delegation(delegation_id)
+    
+    return {
+        "message": "Délégation révoquée",
+        "delegation_id": delegation_id
+    }
+
+
+@app.get("/users/list", tags=["Users"])
+async def list_users(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Lister tous les utilisateurs (pour partage/délégation)."""
+    user = await get_current_user(credentials)
+    
+    all_users = []
+    for role in ['admin', 'hr_manager', 'employee']:
+        users = db.get_users_by_role(role)
+        for u in users:
+            if u.doc_id != user['id']:  # Exclure l'utilisateur courant
+                all_users.append({
+                    "id": u.doc_id,
+                    "email": u['email'],
+                    "role": u['role']
+                })
+    
+    return all_users
 
 
 if __name__ == "__main__":

@@ -88,4 +88,50 @@ export const updateCommunicationAuth = (authId, action) =>
 export const getMyCommunicationAuths = () =>
   api.get('/communication-auth/my-requests');
 
+// ================================================================
+// DAC FEATURE 1: Document Sharing (HRU Matrix)
+// ================================================================
+export const createDocument = (title, content, is_confidential = false) =>
+  api.post('/documents', { title, content, is_confidential });
+
+export const getMyDocuments = () =>
+  api.get('/documents');
+
+export const getDocument = (doc_id) =>
+  api.get(`/documents/${doc_id}`);
+
+export const shareDocumentDAC = (document_id, target_user_id, permissions) =>
+  api.post('/documents/share/dac', { document_id, target_user_id, permissions });
+
+export const shareDocumentSecure = (document_id, target_user_id, permissions, can_reshare = false) =>
+  api.post('/documents/share/secure', { document_id, target_user_id, permissions, can_reshare });
+
+export const getACLMatrix = () =>
+  api.get('/documents/acl-matrix');
+
+export const revokeDocumentAccess = (doc_id, user_id) =>
+  api.delete(`/documents/${doc_id}/acl/${user_id}`);
+
+// ================================================================
+// DAC FEATURE 2: Delegation (Take-Grant)
+// ================================================================
+export const createDelegationDAC = (delegate_to_user_id, rights) =>
+  api.post('/delegations/dac', { delegate_to_user_id, rights });
+
+export const createDelegationSecure = (delegate_to_user_id, rights, max_depth = 1, expires_in_hours = 24) =>
+  api.post('/delegations/secure', { delegate_to_user_id, rights, max_depth, expires_in_hours });
+
+export const getMyDelegations = () =>
+  api.get('/delegations/my');
+
+export const getDelegationGraph = () =>
+  api.get('/delegations/graph');
+
+export const revokeDelegation = (delegation_id) =>
+  api.delete(`/delegations/${delegation_id}`);
+
+// Users list for sharing/delegation
+export const listUsers = () =>
+  api.get('/users/list');
+
 export default api;

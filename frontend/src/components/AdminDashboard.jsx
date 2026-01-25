@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { createUser, getAllMessages, getPendingCommunicationAuths, getAllCommunicationAuths, updateCommunicationAuth } from '../api';
+import DACFeatures from './DACFeatures';
 
 const AdminDashboard = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState('authorizations'); // 'authorizations', 'users', 'messages'
+  const [activeTab, setActiveTab] = useState('authorizations'); // 'authorizations', 'users', 'messages', 'dac'
   const [messages, setMessages] = useState([]);
   const [pendingAuths, setPendingAuths] = useState([]);
   const [allAuths, setAllAuths] = useState([]);
@@ -141,6 +142,14 @@ const AdminDashboard = ({ user, onLogout }) => {
             }`}
           >
             📨 Messages ({messages.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('dac')}
+            className={`px-6 py-3 rounded-lg font-medium ${
+              activeTab === 'dac' ? 'btn-primary' : 'btn-secondary'
+            }`}
+          >
+            🔐 DAC Features
           </button>
         </div>
 
@@ -462,6 +471,11 @@ const AdminDashboard = ({ user, onLogout }) => {
               </div>
             )}
           </div>
+        )}
+
+        {/* DAC Features Tab */}
+        {activeTab === 'dac' && (
+          <DACFeatures user={user} />
         )}
       </div>
     </div>
