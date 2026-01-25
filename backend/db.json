@@ -1,0 +1,270 @@
+{
+  "trusted_params": {
+    "1": {
+      "p": "0xffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca237327ffffffffffffffff",
+      "g": "0x2",
+      "created_at": "2025-12-09T23:11:47.179012"
+    }
+  },
+  "users": {
+    "1": {
+      "email": "zeydody@gmail.com",
+      "password_hash": "$2b$12$dTBordCTYRTLuK49DUSmq.mc2eGI4I.LxuGlxyFJU/frhWJniCB.W",
+      "role": "admin",
+      "public_key_certificate": null,
+      "created_at": "2025-12-09T23:13:21.484238"
+    },
+    "2": {
+      "email": "zakarialaidi6@gmail.com",
+      "password_hash": "$2b$12$1hqEafVYku4L1094meWgk.Q2BnA35FuClX6ad8dMzAeoLMfDtZiMG",
+      "role": "hr_manager",
+      "public_key_certificate": null,
+      "created_at": "2025-12-09T23:13:22.180503"
+    },
+    "3": {
+      "email": "abdoumerabet374@gmail.com",
+      "password_hash": "$2b$12$r4nVUb8BHfJsbffr6JdYwuRThEYOHgWEIxDOR9.Pqg/uHRNbb4JwS",
+      "role": "employee",
+      "public_key_certificate": null,
+      "created_at": "2025-12-09T23:13:22.898793"
+    },
+    "4": {
+      "email": "jojoicecold13@gmail.com",
+      "password_hash": "$2b$12$V3Fwng5zCrrhF4oss.yNqud8e1y2sX7D2/7/Gry2qfw84lc0jq.he",
+      "role": "employee",
+      "public_key_certificate": null,
+      "created_at": "2025-12-17T10:22:46.998503"
+    },
+    "5": {
+      "email": "gustlaidi000@gmail.com",
+      "password_hash": "$2b$12$sTKHPYYGI8gPofCmffr4weD52WLcDxcuFI8EHr0S27Za8RP06QVwW",
+      "role": "admin",
+      "public_key_certificate": null,
+      "created_at": "2025-12-17T10:23:03.113088"
+    }
+  },
+  "otp_codes": {},
+  "login_attempts": {
+    "2": {
+      "email": "zakaidi6@gmail.com",
+      "failed_count": 3,
+      "last_attempt": "2025-12-16T20:30:36.807346"
+    }
+  },
+  "otp_attempts": {},
+  "sessions": {
+    "1": {
+      "user_id": 2,
+      "private_key": "0x2be36bbda5ce34aca1c8ef9d1c67fcf7ca1ec8ec247d099c792bf615a58df2d5641d12893e0947840a9982aa61665fce67235586c3773b180dd73b4df12f319c90afbfbbb87851b2561b473ba9d4d3271286f390b6f39e1257875e6d70ccf088996b53cf7fb685c5fcfe48a0bd69b551396e0792b781f637bebaef9be55a7cb9d40fd3e884b85913ce562cfd769a8bbea375e644ec95b01ee32d5cadbb6144f52c1c10439b10380c2bd458176d85a8d7bb0909aa61f0020313c2963c20633cdb",
+      "shared_secret": "0x279ebc6c4ccfbe1a751c503ae445291151e08457490b08eaeba19c3cabbe0c31be8656af251b7d031594758f695bf8ce5533e0296038e55a5d1a87e4605a344f4c0a253b44f635e11d7d65679a92668a866d0e7ba2ca6468497f1d8c6b76b40fc5ea94086227ef7304da5a8b32a769f01f2ad731e2a3a5898784e7debfc1746a783d0837ff9a4b5aa1a7c8f6d1cba72acbf4a4a54206f7b0094ab1ef58f742c5a523f68a8e5b7b7c4db435839a94394b702cbdcdc1aca8c6b6bca10aebd76d5a",
+      "created_at": "2025-12-16T21:23:52.329948"
+    },
+    "2": {
+      "user_id": 3,
+      "private_key": "0x0",
+      "shared_secret": "0xf18bbd63f73121d690b11de883ad36aedece2da300f5db3758622d24c48ce9ac90b58d6fe043ea777ab9c9716edf5a59870fc9a9937216c6fad12659ac2860dfc670d7e123895c04ac12f540a5908575a9b28c5bba03b22e4a6d3c8d497b0beab53dc415fe7cbe8d71f3eaa9b79180175511dc98e246cca419682fb217acfff76fe2bfe9b813e054ca049f975d0be26edae0ed774661ecaef399aa62aac5608f4bd7db15f9d8ca048896798b933920ea608b823bd386820f8fe79b13ee3f076d",
+      "created_at": "2025-12-16T21:53:06.480282"
+    },
+    "3": {
+      "user_id": 4,
+      "private_key": "0x0",
+      "shared_secret": "0x279ebc6c4ccfbe1a751c503ae445291151e08457490b08eaeba19c3cabbe0c31be8656af251b7d031594758f695bf8ce5533e0296038e55a5d1a87e4605a344f4c0a253b44f635e11d7d65679a92668a866d0e7ba2ca6468497f1d8c6b76b40fc5ea94086227ef7304da5a8b32a769f01f2ad731e2a3a5898784e7debfc1746a783d0837ff9a4b5aa1a7c8f6d1cba72acbf4a4a54206f7b0094ab1ef58f742c5a523f68a8e5b7b7c4db435839a94394b702cbdcdc1aca8c6b6bca10aebd76d5a",
+      "created_at": "2025-12-17T10:29:21.194170"
+    }
+  },
+  "messages": {
+    "2": {
+      "from_id": 3,
+      "to_id": 2,
+      "encrypted_content": "q9KBudwmochJzygp+fRarhAPuCJSTN1ggPbZOSi/sn/S/O/S3354/nM5VjNM/YDHpKvJcpLNB60dU8G9UDF0jRIX2Kw02iDjMMPPjXa2YhjZ7vTF1EluKmeCkw118O6mqsK8P0HiULNPZ1XksXiilg==",
+      "iv": "Jp0HF3HaiKlQNGE/MLScMw==",
+      "timestamp": "2025-12-16T21:53:40.040827",
+      "decrypted": false
+    },
+    "3": {
+      "from_id": 4,
+      "to_id": 2,
+      "encrypted_content": "nOSt+4Sae6Mx81g89Iz81Xx47nzHJKgng6txP5DcKiyI52d3iCV8bvq2tZqCDFiKGI7M7koF6Eer5tqqWmcCaoTaMApMPz06lQayg8iAIp6D2B0omuWn0Kc+SsUI+h7gmZHqiar+Ex+9XZ7lr5WiGQ==",
+      "iv": "KK0Wc/24PbEFIzDyd9tCRA==",
+      "timestamp": "2025-12-17T10:29:39.962636",
+      "decrypted": false
+    }
+  },
+  "leave_requests": {
+    "1": {
+      "employee_id": 3,
+      "employee_email": "abdoumerabet374@gmail.com",
+      "type": "conge",
+      "start_date": "2025-12-17",
+      "end_date": "2026-12-17",
+      "reason": "je ne veux plus travailler",
+      "days_count": 366,
+      "status": "rejected",
+      "hr_comment": "Non",
+      "created_at": "2025-12-16T21:39:46.098681",
+      "updated_at": "2025-12-16T21:50:41.095364"
+    },
+    "2": {
+      "employee_id": 3,
+      "employee_email": "abdoumerabet374@gmail.com",
+      "type": "absence",
+      "start_date": "2025-12-12",
+      "end_date": "2025-12-15",
+      "reason": "Malade",
+      "days_count": 4,
+      "status": "approved",
+      "hr_comment": null,
+      "created_at": "2025-12-16T21:41:27.358661",
+      "updated_at": "2025-12-16T21:49:37.292996"
+    },
+    "3": {
+      "employee_id": 4,
+      "employee_email": "jojoicecold13@gmail.com",
+      "type": "absence",
+      "start_date": "2025-12-17",
+      "end_date": "2025-12-28",
+      "reason": "Maladie",
+      "days_count": 12,
+      "status": "pending",
+      "hr_comment": null,
+      "created_at": "2025-12-17T10:26:46.178688",
+      "updated_at": null
+    }
+  },
+  "dac_documents": {
+    "1": {
+      "owner_id": 1,
+      "owner_email": "zeydody@gmail.com",
+      "title": "test 5",
+      "content": "testing ground zaki",
+      "is_confidential": true,
+      "created_at": "2026-01-25T20:49:39.752490",
+      "updated_at": "2026-01-25T20:51:21.884261"
+    },
+    "2": {
+      "owner_id": 3,
+      "owner_email": "abdoumerabet374@gmail.com",
+      "title": "test 5",
+      "content": "testing ground zaki",
+      "is_confidential": false,
+      "created_at": "2026-01-25T20:52:04.572339",
+      "updated_at": null
+    }
+  },
+  "dac_permissions": {
+    "1": {
+      "document_id": 1,
+      "user_id": 1,
+      "read": true,
+      "write": true,
+      "delete": true,
+      "share": true,
+      "granted_by": 1,
+      "granted_at": "2026-01-25T20:49:39.813362"
+    },
+    "2": {
+      "document_id": 1,
+      "user_id": 2,
+      "read": true,
+      "write": true,
+      "delete": true,
+      "share": true,
+      "granted_by": 1,
+      "granted_at": "2026-01-25T20:50:49.947217"
+    },
+    "3": {
+      "document_id": 1,
+      "user_id": 3,
+      "read": true,
+      "write": false,
+      "delete": false,
+      "share": false,
+      "granted_by": 2,
+      "granted_at": "2026-01-25T20:51:49.281868"
+    },
+    "4": {
+      "document_id": 2,
+      "user_id": 3,
+      "read": true,
+      "write": true,
+      "delete": true,
+      "share": true,
+      "granted_by": 3,
+      "granted_at": "2026-01-25T20:52:04.623170"
+    }
+  },
+  "dac_audit_log": {
+    "1": {
+      "action": "created",
+      "document_id": 1,
+      "document_title": "test 5",
+      "actor_id": 1,
+      "actor_email": "zeydody@gmail.com",
+      "target_user_id": null,
+      "target_user_email": null,
+      "details": "Document created. Confidential: True",
+      "timestamp": "2026-01-25T20:49:39.815767",
+      "security_warning": null
+    },
+    "2": {
+      "action": "shared",
+      "document_id": 1,
+      "document_title": "test 5",
+      "actor_id": 1,
+      "actor_email": "zeydody@gmail.com",
+      "target_user_id": 2,
+      "target_user_email": "zakarialaidi6@gmail.com",
+      "details": "Permissions granted: read=True, write=True, delete=True, share=True",
+      "timestamp": "2026-01-25T20:50:49.949331",
+      "security_warning": "\u26a0\ufe0f DAC WEAKNESS: Confidential document shared - DAC cannot prevent this!"
+    },
+    "3": {
+      "action": "modified",
+      "document_id": 1,
+      "document_title": "test 5",
+      "actor_id": 2,
+      "actor_email": "zakarialaidi6@gmail.com",
+      "target_user_id": null,
+      "target_user_email": null,
+      "details": "Document content updated",
+      "timestamp": "2026-01-25T20:51:21.949693",
+      "security_warning": null
+    },
+    "4": {
+      "action": "shared",
+      "document_id": 1,
+      "document_title": "test 5",
+      "actor_id": 2,
+      "actor_email": "zakarialaidi6@gmail.com",
+      "target_user_id": 3,
+      "target_user_email": "abdoumerabet374@gmail.com",
+      "details": "Permissions granted: read=True, write=False, delete=False, share=False",
+      "timestamp": "2026-01-25T20:51:49.284459",
+      "security_warning": "\u26a0\ufe0f DAC WEAKNESS: Confidential document shared - DAC cannot prevent this!"
+    },
+    "5": {
+      "action": "copied",
+      "document_id": 1,
+      "document_title": "test 5",
+      "actor_id": 3,
+      "actor_email": "abdoumerabet374@gmail.com",
+      "target_user_id": null,
+      "target_user_email": null,
+      "details": "Document copied to new document (ID: 2, Title: test 5)",
+      "timestamp": "2026-01-25T20:52:04.625974",
+      "security_warning": "\u26a0\ufe0f DAC CRITICAL WEAKNESS: Data copied without original restrictions! CONFIDENTIAL data has been duplicated and the new copy is NOT marked as confidential!"
+    },
+    "6": {
+      "action": "created",
+      "document_id": 2,
+      "document_title": "test 5",
+      "actor_id": 3,
+      "actor_email": "abdoumerabet374@gmail.com",
+      "target_user_id": null,
+      "target_user_email": null,
+      "details": "Created as copy of document ID: 1 ('test 5')",
+      "timestamp": "2026-01-25T20:52:04.628656",
+      "security_warning": "This document was created by copying another document. Original access controls do not apply."
+    }
+  }
+}

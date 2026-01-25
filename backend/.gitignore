@@ -11,9 +11,6 @@ env/
 dist/
 build/
 
-# Database
-db.json
-
 # Environment
 .env
 

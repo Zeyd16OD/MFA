@@ -88,44 +88,4 @@ export const updateCommunicationAuth = (authId, action) =>
 export const getMyCommunicationAuths = () =>
   api.get('/communication-auth/my-requests');
 
-// ==================== DAC (Discretionary Access Control) endpoints ====================
-
-// Document management
-export const createDACDocument = (title, content, is_confidential = false) =>
-  api.post('/dac/documents', { title, content, is_confidential });
-
-export const getMyDACDocuments = () =>
-  api.get('/dac/documents');
-
-export const getDACDocument = (docId) =>
-  api.get(`/dac/documents/${docId}`);
-
-export const updateDACDocument = (docId, title, content) =>
-  api.put(`/dac/documents/${docId}`, { title, content });
-
-export const deleteDACDocument = (docId) =>
-  api.delete(`/dac/documents/${docId}`);
-
-// Document sharing
-export const shareDACDocument = (docId, targetUserId, permissions) =>
-  api.post(`/dac/documents/${docId}/share`, { 
-    target_user_id: targetUserId, 
-    permissions 
-  });
-
-export const revokeDACShare = (docId, userId) =>
-  api.delete(`/dac/documents/${docId}/share/${userId}`);
-
-// Document copying (demonstrates DAC weakness)
-export const copyDACDocument = (docId, newTitle) =>
-  api.post(`/dac/documents/${docId}/copy`, { new_title: newTitle });
-
-// Users for sharing
-export const getDACUsers = () =>
-  api.get('/dac/users');
-
-// Audit logs
-export const getDACauditLogs = () =>
-  api.get('/dac/audit-logs');
-
 export default api;
