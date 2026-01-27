@@ -100,6 +100,9 @@ export const getMyDocuments = () =>
 export const getDocument = (doc_id) =>
   api.get(`/documents/${doc_id}`);
 
+export const updateDocument = (doc_id, title, content, is_confidential) =>
+  api.put(`/documents/${doc_id}`, { title, content, is_confidential });
+
 export const shareDocumentDAC = (document_id, target_user_id, permissions) =>
   api.post('/documents/share/dac', { document_id, target_user_id, permissions });
 
@@ -123,6 +126,9 @@ export const createDelegationSecure = (delegate_to_user_id, rights, max_depth = 
 
 export const getMyDelegations = () =>
   api.get('/delegations/my');
+
+export const getMyDelegatedRights = () =>
+  api.get('/delegations/my-rights');
 
 export const getDelegationGraph = () =>
   api.get('/delegations/graph');

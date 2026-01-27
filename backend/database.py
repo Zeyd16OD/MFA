@@ -406,6 +406,17 @@ class Database:
         ACL = Query()
         self.document_acls.remove(ACL.document_id == doc_id)
     
+    def update_document(self, doc_id: int, title: str = None, content: str = None, is_confidential: bool = None):
+        """Mettre à jour un document (requiert permission 'write')."""
+        update_data = {'updated_at': datetime.utcnow().isoformat()}
+        if title is not None:
+            update_data['title'] = title
+        if content is not None:
+            update_data['content'] = content
+        if is_confidential is not None:
+            update_data['is_confidential'] = is_confidential
+        self.documents.update(update_data, doc_ids=[doc_id])
+    
     # ACL Operations (Matrice d'accès)
     def create_document_acl(self, document_id: int, user_id: int, user_email: str,
                            permissions: List[str], can_reshare: bool, 
@@ -487,6 +498,24 @@ class Database:
         Delegation = Query()
         return self.delegations.search(Delegation.delegator_id == delegator_id)
     
+    def get_active_delegations_by_delegator(self, delegator_id: int) -> List[dict]:
+        """Récupérer les délégations actives créées par un utilisateur."""
+        Delegation = Query()
+        all_delegations = self.delegations.search(
+            (Delegation.delegator_id == delegator_id) & (Delegation.is_active == True)
+        )
+        # Filtrer les expirées
+        now = datetime.utcnow()
+        active = []
+        for d in all_delegations:
+            if d.get('expires_at'):
+                expires = datetime.fromisoformat(d['expires_at'])
+                if now < expires:
+                    active.append(d)
+            else:
+                active.append(d)  # DAC mode sans expiration
+        return active
+    
     def get_delegations_for_delegate(self, delegate_id: int) -> List[dict]:
         """Récupérer toutes les délégations reçues par un utilisateur."""
         Delegation = Query()
@@ -529,6 +558,23 @@ class Database:
                 parent_chain = self.get_delegation_chain(d['delegator_id'])
                 chain.extend(parent_chain)
         return chain
+    
+    def user_has_delegated_right(self, user_id: int, right: str) -> bool:
+        """Vérifier si un utilisateur a un droit délégué actif."""
+        delegations = self.get_active_delegations_for_delegate(user_id)
+        for d in delegations:
+            if right in d['rights']:
+                return True
+        return False
+    
+    def get_user_delegated_rights(self, user_id: int) -> List[str]:
+        """Récupérer tous les droits délégués d'un utilisateur."""
+        delegations = self.get_active_delegations_for_delegate(user_id)
+        rights = set()
+        for d in delegations:
+            for r in d['rights']:
+                rights.add(r)
+        return list(rights)
     
     def close(self):
         """Close database connection."""

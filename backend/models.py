@@ -147,6 +147,13 @@ class DocumentCreate(BaseModel):
     is_confidential: bool = False
 
 
+class DocumentUpdate(BaseModel):
+    """Mise à jour d'un document (requiert permission 'write')"""
+    title: Optional[str] = None
+    content: Optional[str] = None
+    is_confidential: Optional[bool] = None
+
+
 class DocumentResponse(BaseModel):
     """Réponse document"""
     id: int

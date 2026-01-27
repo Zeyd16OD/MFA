@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getAllLeaveRequests, updateLeaveRequestStatus } from '../api';
 
-const HRLeaveManagement = () => {
+const HRLeaveManagement = ({ isDelegated = false, canApprove = true }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -75,7 +75,7 @@ const HRLeaveManagement = () => {
     <div className="space-y-6">
       <div className="card">
         <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--md-sys-color-primary)' }}>
-          📊 Gestion des Demandes (DRH)
+          📊 Gestion des Demandes {isDelegated ? '(Délégué)' : '(DRH)'}
         </h2>
 
         {error && (
@@ -211,7 +211,7 @@ const HRLeaveManagement = () => {
                   </p>
                 </div>
 
-                {request.status === 'pending' && (
+                {request.status === 'pending' && canApprove && (
                   <div className="mt-4">
                     {selectedRequest === request.id ? (
                       <div className="space-y-3">
@@ -262,6 +262,13 @@ const HRLeaveManagement = () => {
                         📋 Traiter cette demande
                       </button>
                     )}
+                  </div>
+                )}
+                
+                {/* Message pour délégué sans droit d'approbation */}
+                {request.status === 'pending' && isDelegated && !canApprove && (
+                  <div className="mt-4 p-3 bg-gray-100 rounded-lg text-gray-600 text-sm">
+                    👁️ Mode consultation uniquement - Vous n'avez pas le droit d'approuver les demandes
                   </div>
                 )}
               </div>

@@ -15,7 +15,7 @@ from models import (
     LeaveRequestCreate, LeaveRequestUpdate, LeaveRequestResponse,
     CommunicationAuthResponse, CommunicationAuthUpdate,
     # DAC Models
-    DocumentCreate, DocumentResponse, DocumentShareDAC, DocumentShareSecure, DocumentACLEntry,
+    DocumentCreate, DocumentUpdate, DocumentResponse, DocumentShareDAC, DocumentShareSecure, DocumentACLEntry,
     DelegationCreateDAC, DelegationCreateSecure, DelegationResponse
 )
 from typing import List
@@ -678,13 +678,15 @@ async def get_my_leave_requests(current_user: dict = Depends(get_current_user)):
 async def get_all_leave_requests(current_user: dict = Depends(get_current_user)):
     """
     HR Manager views all leave requests.
-    Only HR Managers can access this endpoint.
-    Admin cannot access this.
+    HR Managers OR users with delegated 'view_requests' right can access.
     """
-    if current_user['role'] != "hr_manager":
+    is_hr = current_user['role'] == "hr_manager"
+    has_delegation = db.user_has_delegated_right(current_user['id'], 'view_requests')
+    
+    if not is_hr and not has_delegation:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seul le DRH peut voir toutes les demandes"
+            detail="Seul le DRH ou un délégué autorisé peut voir toutes les demandes"
         )
     
     requests = db.get_all_leave_requests()
@@ -724,12 +726,15 @@ async def update_leave_request_status(
 ):
     """
     HR Manager updates the status of a leave request (approve/reject).
-    Only HR Managers can update status.
+    HR Managers OR users with delegated 'approve_leave' right can update.
     """
-    if current_user['role'] != "hr_manager":
+    is_hr = current_user['role'] == "hr_manager"
+    has_delegation = db.user_has_delegated_right(current_user['id'], 'approve_leave')
+    
+    if not is_hr and not has_delegation:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seul le DRH peut valider les demandes"
+            detail="Seul le DRH ou un délégué autorisé peut valider les demandes"
         )
     
     # Check if request exists
@@ -1116,14 +1121,15 @@ async def create_document(
     }
 
 
-@app.get("/documents/{doc_id}", tags=["DAC - Documents"])
-async def get_document(
+@app.put("/documents/{doc_id}", tags=["DAC - Documents"])
+async def update_document(
     doc_id: int,
+    update_data: DocumentUpdate,
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Consulter un document spécifique.
-    Vérifie que l'utilisateur a accès (propriétaire ou ACL avec 'read').
+    Modifier un document (requiert permission 'write').
+    Le propriétaire ou tout utilisateur avec 'write' peut modifier.
     """
     user = await get_current_user(credentials)
     
@@ -1131,29 +1137,39 @@ async def get_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document non trouvé")
     
-    # Vérifier l'accès
+    # Vérifier les droits de modification
     is_owner = doc['owner_id'] == user['id']
     user_acl = db.get_user_document_acl(doc_id, user['id'])
     
-    if not is_owner and not user_acl:
-        raise HTTPException(status_code=403, detail="Accès refusé à ce document")
+    if not is_owner:
+        if not user_acl:
+            raise HTTPException(status_code=403, detail="Vous n'avez pas accès à ce document")
+        if 'write' not in user_acl.get('permissions', []):
+            raise HTTPException(status_code=403, detail="Permission 'write' requise pour modifier ce document")
     
-    if not is_owner and 'read' not in user_acl.get('permissions', []):
-        raise HTTPException(status_code=403, detail="Permission 'read' requise")
+    # Effectuer la mise à jour
+    db.update_document(
+        doc_id=doc_id,
+        title=update_data.title,
+        content=update_data.content,
+        is_confidential=update_data.is_confidential
+    )
     
-    # Retourner le document avec les infos d'accès
+    # Récupérer le document mis à jour
+    updated_doc = db.get_document(doc_id)
+    
     return {
-        "id": doc.doc_id,
-        "title": doc['title'],
-        "content": doc['content'],
-        "is_confidential": doc['is_confidential'],
-        "owner_email": doc['owner_email'],
-        "is_owner": is_owner,
-        "permissions": ["own", "read", "write", "share"] if is_owner else user_acl['permissions'],
-        "can_reshare": True if is_owner else user_acl.get('can_reshare', False),
-        "is_dac_mode": None if is_owner else user_acl.get('is_dac_mode'),
-        "granted_by": None if is_owner else user_acl.get('granted_by_email'),
-        "created_at": doc['created_at']
+        "message": "Document modifié avec succès",
+        "document": {
+            "id": updated_doc.doc_id,
+            "title": updated_doc['title'],
+            "content": updated_doc['content'],
+            "is_confidential": updated_doc['is_confidential'],
+            "owner_email": updated_doc['owner_email'],
+            "updated_at": updated_doc.get('updated_at')
+        },
+        "modified_by": user['email'],
+        "hru_operation": f"WRITE: {user['email']} modified doc_{doc_id}"
     }
 
 
@@ -1456,26 +1472,22 @@ async def create_delegation_dac(
     """
     user = await get_current_user(credentials)
     
-    # Vérifier les droits de délégation:
-    # 1. Admin ou HR peuvent toujours déléguer
-    # 2. OU l'utilisateur a reçu une délégation DAC avec can_redelegate=true
-    can_delegate = user['role'] in ['hr_manager', 'admin']
-    user_received_delegations = db.get_active_delegations_for_delegate(user['id'])
-    dac_delegation_with_redelegate = None
+    # HR/Admin peuvent toujours déléguer, OU un utilisateur avec droit 'delegate' délégué
+    is_hr_or_admin = user['role'] in ['hr_manager', 'admin']
+    has_delegate_right = db.user_has_delegated_right(user['id'], 'delegate')
     
-    if not can_delegate:
-        # Chercher une délégation DAC qui permet la re-délégation
-        for d in user_received_delegations:
-            if d['is_dac_mode'] and d['can_redelegate'] and d['is_active']:
-                can_delegate = True
-                dac_delegation_with_redelegate = d
-                break
+    if not is_hr_or_admin and not has_delegate_right:
+        raise HTTPException(status_code=403, detail="Vous n'avez pas le droit de déléguer")
     
-    if not can_delegate:
-        raise HTTPException(
-            status_code=403, 
-            detail="Vous n'avez pas le droit de déléguer. Vous devez être HR/Admin ou avoir reçu une délégation DAC avec droit de re-délégation."
-        )
+    # Si c'est un utilisateur délégué, il ne peut déléguer que les droits qu'il a reçus
+    if not is_hr_or_admin:
+        user_rights = db.get_user_delegated_rights(user['id'])
+        for right in delegation.rights:
+            if right not in user_rights:
+                raise HTTPException(
+                    status_code=403, 
+                    detail=f"Vous ne pouvez pas déléguer le droit '{right}' car vous ne l'avez pas"
+                )
     
     # Vérifier que le délégué existe
     delegate = db.get_user_by_id(delegation.delegate_to_user_id)
@@ -1488,18 +1500,12 @@ async def create_delegation_dac(
     
     can_redelegate = 'delegate' in delegation.rights
     
-    # Si on re-délègue, on hérite des droits de la délégation reçue (ne peut pas donner plus)
-    final_rights = delegation.rights
-    if dac_delegation_with_redelegate:
-        # Limiter aux droits reçus (on ne peut pas donner plus qu'on a)
-        final_rights = [r for r in delegation.rights if r in dac_delegation_with_redelegate['rights'] or r == 'delegate']
-    
     delegation_id = db.create_delegation(
         delegator_id=user['id'],
         delegator_email=user['email'],
         delegate_id=delegation.delegate_to_user_id,
         delegate_email=delegate['email'],
-        rights=final_rights,
+        rights=delegation.rights,
         can_redelegate=can_redelegate,  # ⚠️ FAIBLESSE
         max_depth=-1,  # Illimité en mode DAC
         current_depth=0,
@@ -1507,21 +1513,16 @@ async def create_delegation_dac(
         is_dac_mode=True
     )
     
-    re_delegation_info = ""
-    if dac_delegation_with_redelegate:
-        re_delegation_info = f" (RE-DÉLÉGATION depuis {dac_delegation_with_redelegate['delegator_email']})"
-    
     return {
-        "message": f"🔴 Délégation créée (MODE DAC - VULNÉRABLE){re_delegation_info}",
+        "message": "🔴 Délégation créée (MODE DAC - VULNÉRABLE)",
         "warning": "⚠️ FAIBLESSE Take-Grant: Le délégué peut RE-DÉLÉGUER sans limite!",
         "delegation_id": delegation_id,
         "delegator": user['email'],
         "delegate": delegate['email'],
-        "rights": final_rights,
+        "rights": delegation.rights,
         "can_redelegate": can_redelegate,
-        "is_redelegation": dac_delegation_with_redelegate is not None,
         "expires_at": None,
-        "take_grant_operation": f"GRANT: Arc g de {user['email']} vers {delegate['email']} avec droits {final_rights}"
+        "take_grant_operation": f"GRANT: Arc g de {user['email']} vers {delegate['email']} avec droits {delegation.rights}"
     }
 
 
@@ -1541,35 +1542,28 @@ async def create_delegation_secure(
     """
     user = await get_current_user(credentials)
     
-    # Vérifier les droits de délégation:
-    # 1. Admin ou HR peuvent toujours déléguer
-    # 2. OU l'utilisateur a reçu une délégation sécurisée avec can_redelegate=true et max_depth > current_depth
-    can_delegate = user['role'] in ['hr_manager', 'admin']
+    # HR/Admin peuvent toujours déléguer
+    is_hr_or_admin = user['role'] in ['hr_manager', 'admin']
+    
+    # Pour les utilisateurs délégués, vérifier s'ils ont le droit de re-déléguer
+    # En mode sécurisé, can_redelegate = True signifie qu'on peut re-déléguer
+    # En mode DAC, le droit 'delegate' dans rights permet de re-déléguer
     user_delegations = db.get_active_delegations_for_delegate(user['id'])
-    parent_delegation = None
-    current_depth = 0
+    can_redelegate_secure = any(d.get('can_redelegate', False) for d in user_delegations)
+    has_delegate_right = db.user_has_delegated_right(user['id'], 'delegate')
     
-    if not can_delegate:
-        # Chercher une délégation sécurisée qui permet la re-délégation
-        for d in user_delegations:
-            if not d['is_dac_mode'] and d['can_redelegate'] and d['is_active']:
-                # Vérifier la profondeur
-                if d['max_depth'] > d['current_depth'] + 1:
-                    can_delegate = True
-                    parent_delegation = d
-                    current_depth = d['current_depth'] + 1
-                    break
-                else:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"🔒 Profondeur maximale atteinte ({d['max_depth']}). Impossible de re-déléguer."
-                    )
+    if not is_hr_or_admin and not has_delegate_right and not can_redelegate_secure:
+        raise HTTPException(status_code=403, detail="Vous n'avez pas le droit de déléguer")
     
-    if not can_delegate:
-        raise HTTPException(
-            status_code=403, 
-            detail="Vous n'avez pas le droit de déléguer. Vous devez être HR/Admin ou avoir reçu une délégation avec droit de re-délégation."
-        )
+    # Si c'est un utilisateur délégué, il ne peut déléguer que les droits qu'il a reçus
+    if not is_hr_or_admin:
+        user_rights = db.get_user_delegated_rights(user['id'])
+        for right in delegation.rights:
+            if right not in user_rights:
+                raise HTTPException(
+                    status_code=403, 
+                    detail=f"Vous ne pouvez pas déléguer le droit '{right}' car vous ne l'avez pas"
+                )
     
     # Vérifier que le délégué existe
     delegate = db.get_user_by_id(delegation.delegate_to_user_id)
@@ -1579,50 +1573,73 @@ async def create_delegation_secure(
     if delegate.doc_id == user['id']:
         raise HTTPException(status_code=400, detail="Impossible de déléguer à soi-même")
     
-    # Calculer max_depth effectif (ne peut pas dépasser celui du parent)
-    effective_max_depth = delegation.max_depth
-    if parent_delegation:
-        remaining_depth = parent_delegation['max_depth'] - current_depth
-        effective_max_depth = min(delegation.max_depth, remaining_depth)
+    # Trouver la délégation parente (mode sécurisé) pour calculer les limites
+    parent_delegation = None
+    parent_expires_at = None
+    for d in user_delegations:
+        if not d['is_dac_mode']:
+            parent_delegation = d
+            parent_expires_at = d.get('expires_at')
+            break
     
-    expires_at = (datetime.utcnow() + timedelta(hours=delegation.expires_in_hours)).isoformat()
-    
-    # Si on re-délègue, limiter aux droits reçus
-    final_rights = delegation.rights
+    # Calculer la nouvelle profondeur (current_depth de la délégation enfant)
     if parent_delegation:
-        final_rights = [r for r in delegation.rights if r in parent_delegation['rights']]
+        new_current_depth = parent_delegation['current_depth'] + 1
+        parent_max_depth = parent_delegation['max_depth']
+        
+        # Vérifier si on peut encore déléguer (profondeur non atteinte)
+        if parent_max_depth <= new_current_depth:
+            raise HTTPException(
+                status_code=403,
+                detail=f"🔒 Profondeur maximale atteinte. Vous êtes au niveau {new_current_depth}, max autorisé: {parent_max_depth}"
+            )
+        
+        # La nouvelle max_depth ne peut pas dépasser ce qui reste
+        remaining_depth = parent_max_depth - new_current_depth
+        if delegation.max_depth > remaining_depth:
+            delegation.max_depth = remaining_depth  # Limiter automatiquement
+    else:
+        new_current_depth = 0
+    
+    # Calculer l'expiration - ne peut pas dépasser celle du parent
+    requested_expires_at = datetime.utcnow() + timedelta(hours=delegation.expires_in_hours)
+    
+    if parent_expires_at:
+        parent_expiry = datetime.fromisoformat(parent_expires_at)
+        if requested_expires_at > parent_expiry:
+            # Limiter à l'expiration du parent
+            expires_at = parent_expires_at
+        else:
+            expires_at = requested_expires_at.isoformat()
+    else:
+        expires_at = requested_expires_at.isoformat()
     
     delegation_id = db.create_delegation(
         delegator_id=user['id'],
         delegator_email=user['email'],
         delegate_id=delegation.delegate_to_user_id,
         delegate_email=delegate['email'],
-        rights=final_rights,
-        can_redelegate=effective_max_depth > 0,  # Peut re-déléguer si depth > 0
-        max_depth=effective_max_depth,  # ✅ SOLUTION 1: Limite de profondeur
-        current_depth=current_depth,
-        expires_at=expires_at,  # ✅ SOLUTION 2: Expiration
+        rights=delegation.rights,
+        can_redelegate=delegation.max_depth > 0,  # Peut re-déléguer si depth > 0
+        max_depth=delegation.max_depth,
+        current_depth=new_current_depth,
+        expires_at=expires_at,
         is_dac_mode=False
     )
     
-    re_delegation_info = ""
-    if parent_delegation:
-        re_delegation_info = f" (RE-DÉLÉGATION niveau {current_depth}/{parent_delegation['max_depth']})"
-    
     return {
-        "message": f"🟢 Délégation créée (MODE SÉCURISÉ){re_delegation_info}",
+        "message": "🟢 Délégation créée (MODE SÉCURISÉ)",
         "solutions": {
-            "profondeur": f"Max {effective_max_depth} niveaux de re-délégation restants",
-            "expiration": f"Expire dans {delegation.expires_in_hours} heures"
+            "profondeur": f"Niveau actuel: {new_current_depth}, Max autorisé: {delegation.max_depth} niveaux de re-délégation",
+            "expiration": f"Expire le {expires_at}"
         },
         "delegation_id": delegation_id,
         "delegator": user['email'],
         "delegate": delegate['email'],
-        "rights": final_rights,
-        "max_depth": effective_max_depth,
-        "current_depth": current_depth,
-        "can_redelegate": effective_max_depth > 0,
-        "is_redelegation": parent_delegation is not None,
+        "rights": delegation.rights,
+        "max_depth": delegation.max_depth,
+        "current_depth": new_current_depth,
+        "can_redelegate": delegation.max_depth > 0,
         "expires_at": expires_at
     }
 
@@ -1631,10 +1648,10 @@ async def create_delegation_secure(
 async def get_my_delegations(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
-    """Récupérer mes délégations (données et reçues)."""
+    """Récupérer mes délégations (données et reçues) - uniquement les actives."""
     user = await get_current_user(credentials)
     
-    given = db.get_delegations_by_delegator(user['id'])
+    given = db.get_active_delegations_by_delegator(user['id'])
     received = db.get_active_delegations_for_delegate(user['id'])
     
     return {
@@ -1658,6 +1675,24 @@ async def get_my_delegations(
             "expires_at": d.get('expires_at'),
             "created_at": d['created_at']
         } for d in received]
+    }
+
+
+@app.get("/delegations/my-rights", tags=["DAC - Délégations"])
+async def get_my_delegated_rights(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Récupérer les droits délégués actifs de l'utilisateur."""
+    user = await get_current_user(credentials)
+    rights = db.get_user_delegated_rights(user['id'])
+    delegations = db.get_active_delegations_for_delegate(user['id'])
+    
+    return {
+        "delegated_rights": rights,
+        "has_view_requests": "view_requests" in rights,
+        "has_approve_leave": "approve_leave" in rights,
+        "has_delegate": "delegate" in rights,
+        "delegations_count": len(delegations)
     }
 
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  createDocument, getMyDocuments, getDocument, shareDocumentDAC, shareDocumentSecure,
+  createDocument, getMyDocuments, getDocument, updateDocument, shareDocumentDAC, shareDocumentSecure,
   getACLMatrix, revokeDocumentAccess,
   createDelegationDAC, createDelegationSecure, getMyDelegations,
   getDelegationGraph, revokeDelegation, listUsers
@@ -15,7 +15,9 @@ export default function DACFeatures({ user }) {
   const [newDoc, setNewDoc] = useState({ title: '', content: '', is_confidential: false });
   const [shareData, setShareData] = useState({ document_id: '', target_user_id: '', permissions: ['read'] });
   const [aclMatrix, setAclMatrix] = useState(null);
-  const [viewingDocument, setViewingDocument] = useState(null); // Pour afficher un document
+  const [viewingDocument, setViewingDocument] = useState(null); // Pour consulter un document
+  const [editingDocument, setEditingDocument] = useState(null); // Pour modifier un document
+  const [editForm, setEditForm] = useState({ title: '', content: '', is_confidential: false });
   
   // Delegations state
   const [delegations, setDelegations] = useState({ delegations_given: [], delegations_received: [] });
@@ -32,9 +34,15 @@ export default function DACFeatures({ user }) {
   const [message, setMessage] = useState({ text: '', type: '' });
   const [loading, setLoading] = useState(false);
   
-  // Check if user can delegate (HR/Admin OR has received a delegation with can_redelegate)
+  // Check if user can delegate (HR/Admin OR has received a delegation with 'delegate' right or can_redelegate)
   const canDelegate = user.role === 'hr_manager' || user.role === 'admin' || 
-    delegations.delegations_received.some(d => d.can_redelegate);
+    delegations.delegations_received.some(d => d.can_redelegate || d.rights.includes('delegate'));
+  
+  // Get the delegated rights the user has (for re-delegation)
+  const myDelegatedRights = delegations.delegations_received.reduce((acc, d) => {
+    d.rights.forEach(r => acc.add(r));
+    return acc;
+  }, new Set());
 
   useEffect(() => {
     loadData();
@@ -153,25 +161,49 @@ export default function DACFeatures({ user }) {
   };
 
   // =============== VIEW DOCUMENT FUNCTION ===============
-  const handleViewDocument = async (docId) => {
+  const handleViewDocument = async (doc) => {
+    setViewingDocument(doc);
+  };
+
+  // =============== EDIT DOCUMENT FUNCTIONS ===============
+  const handleOpenEdit = (doc) => {
+    setEditingDocument(doc);
+    setEditForm({
+      title: doc.title,
+      content: doc.content,
+      is_confidential: doc.is_confidential
+    });
+  };
+
+  const handleSaveDocument = async () => {
+    if (!editingDocument) return;
+    setLoading(true);
     try {
-      const res = await getDocument(docId);
-      setViewingDocument(res.data);
+      const res = await updateDocument(
+        editingDocument.id,
+        editForm.title,
+        editForm.content,
+        editForm.is_confidential
+      );
+      showMessage(`✅ ${res.data.message}`, 'success');
+      setEditingDocument(null);
+      loadData();
     } catch (error) {
-      showMessage(`❌ ${error.response?.data?.detail || 'Erreur lors de la consultation'}`, 'error');
+      showMessage(`❌ ${error.response?.data?.detail || 'Erreur lors de la modification'}`, 'error');
     }
+    setLoading(false);
   };
 
   return (
     <div className="space-y-6">
-      {/* Document Viewer Modal */}
+      {/* View Document Modal */}
       {viewingDocument && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto">
             <div className="p-6">
               <div className="flex justify-between items-start mb-4">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-800">{viewingDocument.title}</h3>
+                  <h3 className="text-xl font-bold text-gray-800">👁️ Consultation: {viewingDocument.title}</h3>
                   {viewingDocument.is_confidential && (
                     <span className="text-xs bg-red-100 text-red-600 px-2 py-1 rounded">🔒 Confidentiel</span>
                   )}
@@ -184,7 +216,7 @@ export default function DACFeatures({ user }) {
                 </button>
               </div>
               
-              <div className="bg-gray-50 rounded-lg p-4 mb-4">
+              <div className="bg-gray-50 rounded-lg p-4 mb-4 min-h-[150px]">
                 <p className="whitespace-pre-wrap">{viewingDocument.content}</p>
               </div>
               
@@ -195,14 +227,11 @@ export default function DACFeatures({ user }) {
                 </div>
                 <div className={`rounded p-3 ${viewingDocument.is_owner ? 'bg-amber-50' : viewingDocument.is_dac_mode ? 'bg-red-50' : 'bg-green-50'}`}>
                   <p className="font-medium">Mes permissions</p>
-                  <p className="text-sm">{viewingDocument.permissions.join(', ')}</p>
-                  {viewingDocument.can_reshare && (
-                    <p className="text-yellow-600 text-xs mt-1">⚠️ Peut re-partager</p>
-                  )}
+                  <p className="text-sm">{viewingDocument.permissions?.join(', ')}</p>
                 </div>
               </div>
               
-              {!viewingDocument.is_owner && (
+              {!viewingDocument.is_owner && viewingDocument.granted_by && (
                 <div className="mt-4 p-3 rounded text-sm" style={{
                   backgroundColor: viewingDocument.is_dac_mode ? '#fef2f2' : '#f0fdf4'
                 }}>
@@ -219,6 +248,73 @@ export default function DACFeatures({ user }) {
                   className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700"
                 >
                   Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Document Modal */}
+      {editingDocument && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-xl font-bold text-gray-800">✏️ Modifier le document</h3>
+                <button 
+                  onClick={() => setEditingDocument(null)}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  ×
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Titre</label>
+                  <input
+                    type="text"
+                    value={editForm.title}
+                    onChange={(e) => setEditForm({...editForm, title: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Contenu</label>
+                  <textarea
+                    value={editForm.content}
+                    onChange={(e) => setEditForm({...editForm, content: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                    rows={6}
+                  />
+                </div>
+                
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={editForm.is_confidential}
+                    onChange={(e) => setEditForm({...editForm, is_confidential: e.target.checked})}
+                    className="rounded text-amber-600"
+                  />
+                  <span>Document confidentiel</span>
+                </label>
+              </div>
+              
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  onClick={() => setEditingDocument(null)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleSaveDocument}
+                  disabled={loading}
+                  className="bg-amber-600 text-white px-4 py-2 rounded-lg hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {loading ? 'Enregistrement...' : '💾 Enregistrer'}
                 </button>
               </div>
             </div>
@@ -436,17 +532,31 @@ export default function DACFeatures({ user }) {
                     <div className="flex-1">
                       <span className="font-bold">{doc.title}</span>
                       {doc.is_confidential && <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">Confidentiel</span>}
-                      <p className="text-sm text-gray-600 mt-1 truncate">{doc.content.substring(0, 50)}...</p>
+                      <p className="text-sm text-gray-600 mt-1 truncate">{doc.content.substring(0, 80)}...</p>
                       <p className="text-xs text-gray-500 mt-1">
                         Permissions: <code className="bg-gray-100 px-1">{doc.permissions.join(', ')}</code>
                       </p>
                     </div>
-                    <button
-                      onClick={() => handleViewDocument(doc.id)}
-                      className="bg-amber-600 text-white px-3 py-1 rounded text-sm hover:bg-amber-700"
-                    >
-                      👁️ Consulter
-                    </button>
+                    <div className="flex gap-2 ml-4">
+                      {doc.permissions.includes('read') && (
+                        <button
+                          onClick={() => handleViewDocument(doc)}
+                          className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700"
+                          title="Consulter le document"
+                        >
+                          👁️ Consulter
+                        </button>
+                      )}
+                      {doc.permissions.includes('write') && (
+                        <button
+                          onClick={() => handleOpenEdit(doc)}
+                          className="bg-amber-600 text-white px-3 py-1 rounded text-sm hover:bg-amber-700"
+                          title="Modifier le document"
+                        >
+                          ✏️ Modifier
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -470,19 +580,35 @@ export default function DACFeatures({ user }) {
                         {doc.is_dac_mode ? '🔴 DAC' : '🟢 Sécurisé'}
                       </span>
                       {doc.can_reshare && <span className="ml-1 text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">⚠️ Peut re-partager</span>}
-                      <p className="text-sm text-gray-600 mt-1 truncate">{doc.content.substring(0, 50)}...</p>
+                      <p className="text-sm text-gray-600 mt-1 truncate">{doc.content.substring(0, 80)}...</p>
                       <p className="text-xs text-gray-500 mt-1">
                         Partagé par: {doc.granted_by} | Permissions: <code className="bg-gray-100 px-1">{doc.permissions.join(', ')}</code>
                       </p>
                     </div>
-                    <button
-                      onClick={() => handleViewDocument(doc.id)}
-                      className={`px-3 py-1 rounded text-sm text-white ${
-                        doc.is_dac_mode ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
-                      }`}
-                    >
-                      👁️ Consulter
-                    </button>
+                    <div className="flex gap-2 ml-4">
+                      {doc.permissions.includes('read') && (
+                        <button
+                          onClick={() => handleViewDocument(doc)}
+                          className={`text-white px-3 py-1 rounded text-sm ${
+                            doc.is_dac_mode ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
+                          }`}
+                          title="Consulter le document"
+                        >
+                          👁️ Consulter
+                        </button>
+                      )}
+                      {doc.permissions.includes('write') && (
+                        <button
+                          onClick={() => handleOpenEdit(doc)}
+                          className={`text-white px-3 py-1 rounded text-sm ${
+                            doc.is_dac_mode ? 'bg-orange-600 hover:bg-orange-700' : 'bg-teal-600 hover:bg-teal-700'
+                          }`}
+                          title="Modifier le document"
+                        >
+                          ✏️ Modifier
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -522,17 +648,29 @@ export default function DACFeatures({ user }) {
             </div>
           </div>
 
-          {/* Create Delegation (HR/Admin OR users with can_redelegate) */}
+          {/* Create Delegation (HR/Admin OR user with delegate right) */}
           {canDelegate && (
-            <div className="bg-white rounded-lg shadow p-6">
+            <div className={`rounded-lg shadow p-6 ${
+              user.role !== 'hr_manager' && user.role !== 'admin' 
+                ? 'bg-amber-50 border-2 border-amber-300' 
+                : 'bg-white'
+            }`}>
               <h3 className="text-lg font-bold text-gray-800 mb-4">
-                ➕ {user.role === 'hr_manager' || user.role === 'admin' ? 'Créer une Délégation' : '🔄 Re-Déléguer (vous avez reçu ce droit)'}
+                ➕ Créer une Délégation
+                {user.role !== 'hr_manager' && user.role !== 'admin' && (
+                  <span className="ml-2 text-sm font-normal text-amber-600">(Re-délégation)</span>
+                )}
               </h3>
-              {!(user.role === 'hr_manager' || user.role === 'admin') && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4 text-sm text-yellow-800">
-                  ⚠️ Vous pouvez re-déléguer grâce à une délégation DAC reçue. Ceci démontre la <strong>faiblesse Take-Grant</strong>: chaîne de délégation non contrôlée.
+              
+              {/* Warning for delegated users */}
+              {user.role !== 'hr_manager' && user.role !== 'admin' && (
+                <div className="mb-4 p-3 bg-amber-100 border border-amber-300 rounded-lg text-sm text-amber-800">
+                  ⚠️ Vous re-déléguez des droits qui vous ont été délégués. 
+                  Vous ne pouvez déléguer que les droits que vous possédez : 
+                  <strong className="ml-1">{Array.from(myDelegatedRights).join(', ')}</strong>
                 </div>
               )}
+              
               <div className="space-y-4">
                 <select
                   value={newDelegation.delegate_to_user_id}
@@ -540,30 +678,36 @@ export default function DACFeatures({ user }) {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg"
                 >
                   <option value="">-- Déléguer à --</option>
-                  {users.map(u => (
+                  {users.filter(u => u.id !== user.id).map(u => (
                     <option key={u.id} value={u.id}>{u.email} ({u.role})</option>
                   ))}
                 </select>
 
                 <div className="flex gap-4 flex-wrap">
-                  {['approve_leave', 'view_requests', 'delegate'].map(right => (
-                    <label key={right} className="flex items-center gap-1">
-                      <input
-                        type="checkbox"
-                        checked={newDelegation.rights.includes(right)}
-                        onChange={(e) => {
-                          const rights = e.target.checked 
-                            ? [...newDelegation.rights, right]
-                            : newDelegation.rights.filter(r => r !== right);
-                          setNewDelegation({...newDelegation, rights: rights});
-                        }}
-                        className="rounded text-amber-600"
-                      />
-                      <span className={right === 'delegate' ? 'text-red-600 font-medium' : ''}>
-                        {right.replace('_', ' ')} {right === 'delegate' && '⚠️'}
-                      </span>
-                    </label>
-                  ))}
+                  {['approve_leave', 'view_requests', 'delegate'].map(right => {
+                    // Pour les utilisateurs délégués, désactiver les droits qu'ils n'ont pas
+                    const isHROrAdmin = user.role === 'hr_manager' || user.role === 'admin';
+                    const hasRight = isHROrAdmin || myDelegatedRights.has(right);
+                    
+                    return (
+                      <label key={right} className={`flex items-center gap-1 ${!hasRight ? 'opacity-50' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={newDelegation.rights.includes(right)}
+                          disabled={!hasRight}
+                          onChange={(e) => {
+                            const rights = e.target.checked 
+                              ? [...newDelegation.rights, right]
+                              : newDelegation.rights.filter(r => r !== right);
+                            setNewDelegation({...newDelegation, rights: rights});
+                          }}
+                          className="rounded text-amber-600"
+                        />
+                        <span>{right.replace(/_/g, ' ')}</span>
+                        {!hasRight && <span className="text-xs text-gray-400">(non disponible)</span>}
+                      </label>
+                    );
+                  })}
                 </div>
 
                 {/* Secure mode options */}
@@ -655,32 +799,19 @@ export default function DACFeatures({ user }) {
                 <div key={d.id} className={`border rounded p-3 ${
                   d.mode === 'DAC' ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'
                 }`}>
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <span className="font-bold">← {d.delegator}</span>
-                      <span className={`ml-2 text-xs px-2 py-1 rounded ${
-                        d.mode === 'DAC' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'
-                      }`}>
-                        {d.mode === 'DAC' ? '🔴 DAC' : '🟢 Sécurisé'}
-                      </span>
-                      {d.can_redelegate && (
-                        <span className="ml-1 text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">
-                          ⚠️ Peut re-déléguer {d.mode !== 'DAC' && `(${d.max_depth - d.current_depth - 1} niveaux restants)`}
-                        </span>
-                      )}
-                      <p className="text-sm text-gray-600">Droits: {d.rights.join(', ')}</p>
-                      {d.mode !== 'DAC' && (
-                        <p className="text-xs text-gray-500">
-                          Profondeur: {d.current_depth}/{d.max_depth} | Expire: {new Date(d.expires_at).toLocaleString()}
-                        </p>
-                      )}
-                    </div>
-                    {d.can_redelegate && (
-                      <div className="text-xs text-center px-2">
-                        <p className={d.mode === 'DAC' ? 'text-red-600' : 'text-green-600'}>
-                          {d.mode === 'DAC' ? '∞ re-délégations' : 'Limité'}
-                        </p>
-                      </div>
+                  <div>
+                    <span className="font-bold">← {d.delegator}</span>
+                    <span className={`ml-2 text-xs px-2 py-1 rounded ${
+                      d.mode === 'DAC' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'
+                    }`}>
+                      {d.mode === 'DAC' ? '🔴 DAC' : '🟢 Sécurisé'}
+                    </span>
+                    {d.can_redelegate && <span className="ml-1 text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">Peut re-déléguer</span>}
+                    <p className="text-sm text-gray-600">Droits: {d.rights.join(', ')}</p>
+                    {d.mode !== 'DAC' && (
+                      <p className="text-xs text-gray-500">
+                        Profondeur: {d.current_depth}/{d.max_depth} | Expire: {new Date(d.expires_at).toLocaleString()}
+                      </p>
                     )}
                   </div>
                 </div>
